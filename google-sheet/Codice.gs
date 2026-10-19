@@ -18,7 +18,7 @@ const ORE_TURNO = 5;
 const TOLLERANZA_MIN = 15;
 // Fasce orarie dei turni (ora di inizio della timbratura -> fascia)
 const TURNI = [
-  { nome: 'Mattina', inizio: '06:00', fine: '11:00' },
+  { nome: 'Mattina', inizio: '05:00', fine: '11:00' },
   { nome: 'Pomeriggio', inizio: '13:00', fine: '18:00' },
 ];
 // Chi autorizza le ore extra (riceve la richiesta su WhatsApp). Telefono con prefisso, senza + né spazi.
@@ -346,10 +346,11 @@ function azzera_() {
   PropertiesService.getScriptProperties().setProperty('RESET_AT', String(Date.now()));
 }
 
-// Fascia del turno dall'ora di entrata: prima delle 12 mattina, dalle 12 alle 21 pomeriggio
+// Fascia del turno dall'ora di entrata: dall'inizio della mattina (5:00) alle 12 mattina, dalle 12 alle 21 pomeriggio
 function turno_(d) {
   const h = d.getHours() + d.getMinutes() / 60;
-  if (h >= 4 && h < 12) return TURNI[0].nome;
+  const inizioMattina = Number(TURNI[0].inizio.slice(0, 2)) + Number(TURNI[0].inizio.slice(3, 5)) / 60;
+  if (h >= inizioMattina && h < 12) return TURNI[0].nome;
   if (h >= 12 && h < 21) return TURNI[1].nome;
   return 'Fuori orario';
 }

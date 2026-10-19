@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 22;
+const APP_VERSION = 23;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -577,11 +577,12 @@ function applyReset() {
 
 // ---------- Ore extra oltre il turno standard (5 ore) ----------
 const cfg = () => Object.assign({ oreTurno: 5, tolleranzaMin: 15, autorizzaNome: '', autorizzaTelefono: '' }, db.config || {});
-// Fascia del turno dall'ora di entrata (come nello script): prima delle 12 mattina, 12–21 pomeriggio
+// Fascia del turno dall'ora di entrata (come nello script): dalle 5 alle 12 mattina, 12–21 pomeriggio
 function fascia(t) {
   const d = new Date(t), h = d.getHours() + d.getMinutes() / 60;
-  const turni = cfg().turni || [{ nome: 'Mattina', inizio: '06:00', fine: '11:00' }, { nome: 'Pomeriggio', inizio: '13:00', fine: '18:00' }];
-  if (h >= 4 && h < 12) return turni[0];
+  const turni = cfg().turni || [{ nome: 'Mattina', inizio: '05:00', fine: '11:00' }, { nome: 'Pomeriggio', inizio: '13:00', fine: '18:00' }];
+  const inizioMattina = Number(turni[0].inizio.slice(0, 2)) + Number(turni[0].inizio.slice(3, 5)) / 60;
+  if (h >= inizioMattina && h < 12) return turni[0];
   if (h >= 12 && h < 21) return turni[1];
   return null;
 }
