@@ -401,6 +401,7 @@ function mappa_(p) {
 }
 
 function controlloSede_(s, prima) {
+  if (s.demo) return 'PROVA (modalità prova del responsabile)';
   if (!s.posIn && !s.posOut) return (prima && prima[COL_SEDE - 1]) || '';
   const problemi = [fuoriSede_(s.posIn, 'Entrata'), s.end ? fuoriSede_(s.posOut, 'Uscita') : ''].filter(Boolean);
   return problemi.length ? 'FUORI SEDE: ' + problemi.join('; ') : 'OK';

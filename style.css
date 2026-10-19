@@ -204,3 +204,7 @@ dialog h3 { padding-right: 40px; }
 .pill.wait { background: #fef3c7; color: #92400e; }
 label[hidden] { display: none !important; }
 .status .gps { font-size: 14px; }
+.demo-bar { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap;
+  background: #fef3c7; color: #78350f; border: 1px solid #f59e0b; border-radius: var(--radius); padding: 10px 14px; font-size: 14px; }
+.demo-bar[hidden] { display: none; }
+.demo-bar .btn { min-height: 36px; padding: 6px 12px; color: #78350f; border-color: #f59e0b; }

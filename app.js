@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 24;
+const APP_VERSION = 25;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -77,7 +77,23 @@ function distanza(a, b) {
 }
 const fmtDist = d => d >= 1000 ? (d / 1000).toFixed(1).replace('.', ',') + ' km' : Math.round(d) + ' m';
 // Rileva la posizione, controlla la distanza dalla sede e poi esegue cb(pos). Altrimenti blocca la timbratura.
+// Modalità prova: solo sul telefono del responsabile, per mostrare l'app fuori sede. Scade da sola.
+const DEMO_ORE = 8;
+const isDemo = () => !!db.adminDevice && (db.demoUntil || 0) > Date.now();
+function setDemo(on) {
+  db.demoUntil = on ? Date.now() + DEMO_ORE * 3600000 : 0;
+  save();
+  toast(on ? `Modalità prova attiva fino alle ${fmtTime(db.demoUntil)}` : 'Modalità prova disattivata');
+}
 async function requireSede(what, cb) {
+  if (isDemo()) {
+    // In prova si registra comunque la posizione, ma senza bloccare
+    openDialog(`<h3>🧪 Modalità prova</h3><p>Timbratura consentita anche fuori sede…</p>`);
+    $('#dlgBody .dlg-x').remove();
+    const p = await getPos();
+    if (dlg.open) dlg.close();
+    return cb(p);
+  }
   const sede = cfg().sede;
   openDialog(`<h3>📍 Verifico la posizione</h3><p>Controllo che tu sia in sede per timbrare ${esc(what)}…</p>`);
   $('#dlgBody .dlg-x').remove();
@@ -113,7 +129,7 @@ function getPos() {
 // La posizione (pos) arriva già verificata da requireSede()
 function clockIn(siteId, pos) {
   if (db.active) return;
-  db.active = { id: uid(), siteId, start: Date.now(), posIn: pos || null };
+  db.active = { id: uid(), siteId, start: Date.now(), posIn: pos || null, demo: isDemo() || undefined };
   enqueueUpsert(Object.assign({}, db.active, { end: null }));
   save();
   return db.active;
@@ -121,7 +137,7 @@ function clockIn(siteId, pos) {
 function clockOut(pos) {
   if (!db.active) return null;
   const shift = { id: db.active.id || uid(), siteId: db.active.siteId, start: db.active.start, end: Date.now(),
-    posIn: db.active.posIn, posOut: pos || null };
+    posIn: db.active.posIn, posOut: pos || null, demo: db.active.demo || isDemo() || undefined };
   const prevActive = db.active;
   db.shifts.unshift(shift);
   db.active = null;
@@ -140,6 +156,13 @@ function clockOut(pos) {
 // ---------- Render ----------
 let timer;
 function render() {
+  const bar = $('#demoBar');
+  if (isDemo()) {
+    bar.hidden = false;
+    bar.innerHTML = `<span>🧪 <b>Modalità prova</b> fino alle ${fmtTime(db.demoUntil)}: puoi timbrare anche fuori sede (solo questo telefono).</span>
+      <button type="button" class="btn ghost" id="demoOff">Disattiva</button>`;
+    $('#demoOff').onclick = () => setDemo(false);
+  } else bar.hidden = true;
   $('#btnWho').textContent = db.user ? fullName() : 'Inserisci il tuo nome';
   // Stato in alto
   const st = $('#status');
@@ -524,7 +547,7 @@ function enqueue(op) {
 }
 function enqueueUpsert(s) {
   enqueue({ type: 'upsert', shift: { id: s.id, start: s.start, end: s.end || null, site: siteById(s.siteId).name,
-    extra: s.extra || null, posIn: s.posIn || null, posOut: s.posOut || null } });
+    extra: s.extra || null, posIn: s.posIn || null, posOut: s.posOut || null, demo: !!s.demo } });
 }
 function enqueueDelete(id) { enqueue({ type: 'delete', id }); }
 function resyncAll() {
@@ -816,6 +839,7 @@ function adminHome() {
       <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia${adminAbsCount ? ` <span class="badge">${adminAbsCount}</span>` : ''}</button>
       <button class="btn ghost" value="shifts">✏️ Modifica timbrature dei dipendenti</button>
       <button class="btn ghost" value="sede">📍 Sede per le timbrature</button>
+      <button class="btn ghost" value="demo">${isDemo() ? '🧪 Disattiva la modalità prova' : '🧪 Modalità prova: timbra anche fuori sede'}</button>
       <button class="btn ghost" value="pwd">🔑 Cambia password</button>
       <button class="btn ghost danger-text" value="reset">🧹 Azzera tutto e parti da zero</button>
       <button class="btn ghost" value="logout">Esci dall'area responsabile</button>
@@ -830,6 +854,7 @@ function adminHome() {
       assenze: () => call('assenze', null, 'Carico ferie e permessi', out => adminAbsences(out.assenze)),
       pwd: adminChangePassword,
       sede: () => adminSede(),
+      demo: () => { setDemo(!isDemo()); adminHome(); },
       reset: adminReset,
       logout: () => { adminPwd = null; toast('Uscito dall\'area responsabile'); },
       forget: () => { adminPwd = null; db.adminDevice = false; save(); toast('Per rientrare: 5 tocchi veloci sul logo'); },
