@@ -183,3 +183,7 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .extra-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--bg); line-height: 1.5; }
 .extra-card .row { margin-top: 8px; }
 .extra-card span { font-size: 13px; color: var(--muted); }
+.bar { height: 10px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.bar span { display: block; height: 100%; width: 0; background: var(--brand); transition: width .5s; }
+.bar span.over { background: #d97706; }
+.danger-text { color: var(--danger) !important; }

@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 13;
+const APP_VERSION = 14;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -103,15 +103,26 @@ function render() {
       <small>TURNO IN CORSO</small>
       <div class="site-name">${esc(site.name)}</div>
       <div class="timer" id="timer"></div>
-      <p>Entrata alle ${fmtTime(db.active.start)} · ${fmtDate(db.active.start)}</p>
+      <div class="bar"><span id="bar"></span></div>
+      <p id="left"></p>
+      <p>Entrata alle ${fmtTime(db.active.start)} · fine prevista alle ${fmtTime(db.active.start + cfg().oreTurno * 3600000)}</p>
       <button class="btn big danger" id="btnOut">Timbra uscita</button>`;
-    const tick = () => { const el = $('#timer'); if (el) el.textContent = fmtClock(Date.now() - db.active.start); };
+    const tick = () => {
+      const el = $('#timer'); if (!el || !db.active) return;
+      const done = Date.now() - db.active.start, tot = cfg().oreTurno * 3600000;
+      el.textContent = fmtClock(done);
+      $('#bar').style.width = Math.min(100, done / tot * 100) + '%';
+      $('#bar').classList.toggle('over', done > tot);
+      $('#left').textContent = done < tot ? `Mancano ${fmtDur(tot - done)} alle ${cfg().oreTurno} ore`
+        : `${cfg().oreTurno} ore completate · ${fmtDur(done - tot)} in più`;
+      document.title = `⏱ ${fmtClock(done)} · Timbra Cantieri`;
+    };
     tick(); timer = setInterval(tick, 1000);
     $('#btnOut').onclick = () => { const sh = clockOut(); if (sh) afterClockOut(sh, false); };
   } else {
     st.className = 'card status';
     st.innerHTML = `
-      <small>PRONTO A TIMBRARE</small>
+      <small>PRONTO A TIMBRARE</small>${(document.title = 'Timbra Cantieri', '')}
       <h2>Nessun turno attivo</h2>
       <p>Tocca <b>Entrata</b> su un cantiere, oppure passa il telefono sul tag NFC.</p>`;
   }
@@ -489,6 +500,7 @@ async function syncSites() {
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.cantieri)) return;
     if (out.config && JSON.stringify(out.config) !== JSON.stringify(db.config)) { db.config = out.config; save(); }
+    applyReset();
     const names = out.cantieri;
     const byName = new Map(db.sites.map(s => [s.name, s]));
     const visible = names.map((name, i) => {
@@ -500,6 +512,18 @@ async function syncSites() {
     const next = visible.concat(hidden.filter(h => !visible.some(v => v.id === h.id)));
     if (JSON.stringify(next) !== JSON.stringify(db.sites)) { db.sites = next; save(); }
   } catch (e) { /* offline: si tengono i cantieri già scaricati */ }
+}
+
+// Il responsabile ha azzerato il registro ("parti da zero"): via le timbrature locali precedenti.
+function applyReset() {
+  const at = cfg().resetAt || 0;
+  if (!at || (db.resetAt || 0) >= at) return;
+  const old = new Set(db.shifts.filter(s => s.start < at).map(s => s.id));
+  if (db.active && db.active.start < at) { old.add(db.active.id); db.active = null; }
+  db.shifts = db.shifts.filter(s => !old.has(s.id));
+  db.queue = db.queue.filter(o => !(o.shift ? old.has(o.shift.id) || o.shift.start < at : true));
+  db.resetAt = at;
+  save();
 }
 
 // ---------- Ore extra oltre il turno standard (5 ore) ----------
@@ -629,6 +653,7 @@ function adminHome() {
       <button class="btn ghost" value="extra">⏱️ Ore extra da autorizzare${adminExtraCount ? ` <span class="badge">${adminExtraCount}</span>` : ''}</button>
       <button class="btn ghost" value="shifts">✏️ Modifica timbrature dei dipendenti</button>
       <button class="btn ghost" value="pwd">🔑 Cambia password</button>
+      <button class="btn ghost danger-text" value="reset">🧹 Azzera tutto e parti da zero</button>
       <button class="btn ghost" value="logout">Esci dall'area responsabile</button>
       <button class="btn ghost" value="forget">Nascondi l'area responsabile su questo telefono</button>
       <button class="btn" value="">Chiudi</button>
@@ -639,6 +664,7 @@ function adminHome() {
       shifts: adminShiftsPick,
       extra: () => call('extra', null, 'Carico le richieste', out => adminExtra(out.extra)),
       pwd: adminChangePassword,
+      reset: adminReset,
       logout: () => { adminPwd = null; toast('Uscito dall\'area responsabile'); },
       forget: () => { adminPwd = null; db.adminDevice = false; save(); toast('Per rientrare: 5 tocchi veloci sul logo'); },
     }[a];
@@ -816,6 +842,26 @@ function adminShiftEdit(id, filter) {
       toast('Timbratura modificata ✓'); loadShifts(filter);
     }), 50);
   });
+}
+
+// --- Azzeramento
+function adminReset(msg) {
+  openDialog(`
+    <h3>🧹 Azzera tutto</h3>
+    <p>Tutte le timbrature fatte finora (prove comprese) spariscono dall'app, dai telefoni e dai report.
+      Nel Google Sheet non si perdono: vengono spostate nel foglio nascosto "Archivio prove".</p>
+    <p>Restano: cantieri, password, nomi dei dipendenti.</p>
+    ${msg ? `<p class="err">${esc(msg)}</p>` : ''}
+    <label>Per confermare scrivi AZZERA<input name="conf" autocomplete="off" autocapitalize="characters"></label>
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn danger" value="ok">Azzera</button></div>`,
+    (a, fd) => {
+      if (a === 'back') return setTimeout(adminHome, 50);
+      if (String(fd.get('conf') || '').trim().toUpperCase() !== 'AZZERA') return setTimeout(() => adminReset('Scrivi AZZERA per confermare.'), 50);
+      setTimeout(() => call('azzera', null, 'Azzero il registro', () => {
+        adminExtraCount = 0;
+        syncSites().then(() => { toast('Registro azzerato: si parte da zero ✓'); adminHome(); });
+      }), 50);
+    });
 }
 
 // --- Password

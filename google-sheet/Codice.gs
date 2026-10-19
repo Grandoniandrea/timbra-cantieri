@@ -68,6 +68,7 @@ function doGet(e) {
       oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN,
       autorizzaNome: AUTORIZZA_NOME.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_NOME,
       autorizzaTelefono: AUTORIZZA_TELEFONO.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_TELEFONO,
+      resetAt: Number(PropertiesService.getScriptProperties().getProperty('RESET_AT') || 0),
     } });
   }
   return json_({ ok: true, app: 'Timbra Cantieri' });
@@ -136,6 +137,7 @@ function admin_(req) {
     case 'modifica': modificaTimbratura_(req.t); return { ok: true };
     case 'elimina': remove_(req.id); return { ok: true };
     case 'extra': return { ok: true, extra: extraInAttesa_() };
+    case 'azzera': azzera_(); return { ok: true };
     case 'decidi': decidiExtra_(req.id, !!req.approva); return { ok: true, extra: extraInAttesa_() };
     case 'cambiapassword': {
       const nuova = String(req.nuova || '');
@@ -271,6 +273,33 @@ function upsert_(s, user) {
   sh.getRange(r, 7).setNumberFormat('0.00');
   sh.getRange(r, 10).setNumberFormat('dd/mm/yyyy HH:mm');
   sh.getRange(r, COL_EXTRA).setNumberFormat('0.00');
+}
+
+/**
+ * "Parti da zero": sposta tutte le timbrature nel foglio "Archivio prove" (non si perdono),
+ * toglie i riepiloghi e segna l'ora dell'azzeramento: i telefoni cancellano le timbrature locali precedenti.
+ */
+function azzera_() {
+  const ss = ss_();
+  const sh = foglio_();
+  const n = sh.getLastRow() - 1;
+  if (n > 0) {
+    let arch = ss.getSheetByName('Archivio prove');
+    if (!arch) {
+      arch = ss.insertSheet('Archivio prove');
+      arch.appendRow(['Archiviato il'].concat(INTESTAZIONE));
+      arch.getRange(1, 1, 1, INTESTAZIONE.length + 1).setFontWeight('bold');
+    }
+    const quando = new Date();
+    const righe = sh.getRange(2, 1, n, INTESTAZIONE.length).getValues().map(r => [quando].concat(r));
+    arch.getRange(arch.getLastRow() + 1, 1, righe.length, righe[0].length).setValues(righe);
+    arch.hideSheet();
+    sh.deleteRows(2, n);
+  }
+  ss.getSheets().filter(x => x.getName().indexOf('Riepilogo ') === 0).forEach(x => ss.deleteSheet(x));
+  const vuoto = ss.getSheetByName('Foglio1');
+  if (vuoto && vuoto.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(vuoto);
+  PropertiesService.getScriptProperties().setProperty('RESET_AT', String(Date.now()));
 }
 
 function extraInAttesa_() {
