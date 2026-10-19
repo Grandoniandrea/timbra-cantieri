@@ -27,6 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
+const APP_VERSION = 12;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -128,9 +129,9 @@ function render() {
   const managed = !!db.endpoint;
   $('#btnAddSite').hidden = managed;
   $('#sitesNote').hidden = !managed;
-  $('#foot').textContent = managed
+  $('#foot').textContent = (managed
     ? 'Le timbrature vengono inviate al registro aziendale.'
-    : 'I dati restano su questo telefono. Fai un backup ogni tanto dal menu ⋯';
+    : 'I dati restano su questo telefono. Fai un backup ogni tanto dal menu ⋯') + ` · versione ${APP_VERSION}`;
   const shown = db.sites.filter(s => !s.hidden);
   $('#sites').innerHTML = shown.length ? shown.map(s => {
     const here = db.active && db.active.siteId === s.id;
