@@ -198,3 +198,8 @@ dialog form > .row:last-child { position: sticky; bottom: -20px; background: var
 dialog form { position: relative; }
 .dlg-x { position: absolute; top: 10px; right: 10px; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: 16px; cursor: pointer; z-index: 2; }
 dialog h3 { padding-right: 40px; }
+.pill { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 12px; font-weight: 700; margin-left: 4px; }
+.pill.ok { background: #dcfce7; color: #166534; }
+.pill.no { background: #fee2e2; color: #991b1b; }
+.pill.wait { background: #fef3c7; color: #92400e; }
+label[hidden] { display: none !important; }

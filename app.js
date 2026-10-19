@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 19;
+const APP_VERSION = 20;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -64,16 +64,43 @@ function startOfMonth() { const d = new Date(); return new Date(d.getFullYear(),
 const toLocalInput = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
 // ---------- Timbrature ----------
+// Posizione del telefono al momento della timbratura (se l'operatore dà il permesso)
+function getPos() {
+  return new Promise(resolve => {
+    if (!navigator.geolocation) return resolve({ errore: 'non supportata' });
+    navigator.geolocation.getCurrentPosition(
+      p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }),
+      e => resolve({ errore: e.code === 1 ? 'permesso negato' : 'segnale assente' }),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 120000 });
+  });
+}
 function clockIn(siteId) {
   if (db.active) return;
   db.active = { id: uid(), siteId, start: Date.now() };
   enqueueUpsert({ id: db.active.id, siteId, start: db.active.start, end: null });
   save();
+  const id = db.active.id;
+  getPos().then(pos => {
+    if (db.active && db.active.id === id) {
+      db.active.posIn = pos;
+      enqueueUpsert(Object.assign({}, db.active, { end: null }));
+    } else {
+      const s = db.shifts.find(x => x.id === id);
+      if (!s) return;
+      s.posIn = pos; enqueueUpsert(s);
+    }
+    save();
+  });
   return db.active;
 }
 function clockOut() {
   if (!db.active) return null;
-  const shift = { id: db.active.id || uid(), siteId: db.active.siteId, start: db.active.start, end: Date.now() };
+  const shift = { id: db.active.id || uid(), siteId: db.active.siteId, start: db.active.start, end: Date.now(), posIn: db.active.posIn };
+  getPos().then(pos => {
+    const s = db.shifts.find(x => x.id === shift.id);
+    if (!s) return;
+    s.posOut = pos; enqueueUpsert(s); save();
+  });
   const prevActive = db.active;
   db.shifts.unshift(shift);
   db.active = null;
@@ -365,6 +392,7 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
   <p>${esc(syncStatus())}</p>
   <div class="menu">
     <button class="btn" value="share">📤 Invia le mie timbrature al responsabile (WhatsApp)</button>
+    <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia</button>
     <button class="btn ghost" value="csv">⬇︎ Scarica le mie timbrature (Excel)</button>
     <button class="btn ghost" value="">Chiudi</button>
   </div>` : `
@@ -373,6 +401,7 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
   <div class="menu">
     ${db.endpoint ? '<button class="btn" value="admin">🔒 Area responsabile</button>' : ''}
     <button class="btn ghost" value="share">📤 Invia timbrature del mese</button>
+    <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia</button>
     <button class="btn ghost" value="csv">⬇︎ Esporta tutte le timbrature (Excel)</button>
     <button class="btn ghost" value="profile">👤 Cambia nome e cognome</button>
     <button class="btn ghost" value="backup">💾 Salva backup completo</button>
@@ -381,6 +410,7 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
     <button class="btn ghost" value="">Chiudi</button>
   </div>`, action => {
   if (action === 'share') shareMonth();
+  if (action === 'assenze') setTimeout(myAbsences, 50);
   if (action === 'csv') exportCsv();
   if (action === 'profile') setTimeout(() => editProfile(), 50);
   if (action === 'backup') download(`timbra-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(db, null, 2), 'application/json');
@@ -462,12 +492,14 @@ $('#btnWho').onclick = () => editProfile();
 function enqueue(op) {
   op.opId = uid();
   // Per la stessa timbratura conta solo l'ultima operazione.
-  const key = op.shift ? op.shift.id : op.id;
-  db.queue = db.queue.filter(o => (o.shift ? o.shift.id : o.id) !== key);
+  const keyOf = o => o.shift ? o.shift.id : o.assenza ? o.assenza.id : o.id;
+  const key = keyOf(op);
+  db.queue = db.queue.filter(o => keyOf(o) !== key);
   db.queue.push(op);
 }
 function enqueueUpsert(s) {
-  enqueue({ type: 'upsert', shift: { id: s.id, start: s.start, end: s.end || null, site: siteById(s.siteId).name, extra: s.extra || null } });
+  enqueue({ type: 'upsert', shift: { id: s.id, start: s.start, end: s.end || null, site: siteById(s.siteId).name,
+    extra: s.extra || null, posIn: s.posIn || null, posOut: s.posOut || null } });
 }
 function enqueueDelete(id) { enqueue({ type: 'delete', id }); }
 function resyncAll() {
@@ -532,7 +564,8 @@ function applyReset() {
   const old = new Set(db.shifts.filter(s => s.start < at).map(s => s.id));
   if (db.active && db.active.start < at) { old.add(db.active.id); db.active = null; }
   db.shifts = db.shifts.filter(s => !old.has(s.id));
-  db.queue = db.queue.filter(o => !(o.shift ? old.has(o.shift.id) || o.shift.start < at : true));
+  db.queue = db.queue.filter(o => o.assenza ? false : !(o.shift ? old.has(o.shift.id) || o.shift.start < at : true));
+  db.assenze = [];
   db.resetAt = at;
   save();
 }
@@ -597,10 +630,86 @@ function askAuthorization(s) {
     <button class="btn ghost" value="">Fatto</button>`);
 }
 
+// ---------- Ferie, permessi, malattia (dipendente) ----------
+const TIPI_ASSENZA = ['Ferie', 'Permesso', 'Malattia'];
+const fmtDay = iso => iso ? new Date(iso + 'T12:00:00').toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+const statoClass = st => st === 'Approvata' ? 'ok' : st === 'Rifiutata' ? 'no' : 'wait';
+function absLine(a) {
+  const quando = a.tipo === 'Permesso' ? `${fmtDay(a.dal)} · ${String(a.ore).replace('.', ',')} ore`
+    : `${fmtDay(a.dal)}${a.al && a.al !== a.dal ? ' → ' + fmtDay(a.al) : ''}`;
+  return `<b>${esc(a.tipo)}</b> · ${quando}`;
+}
+async function myAbsences() {
+  db.assenze = db.assenze || [];
+  busy('Carico le tue richieste');
+  let server = [];
+  try {
+    const res = await withTimeout(fetch(`${db.endpoint}?azione=assenze&device=${encodeURIComponent(db.user.device)}`), 20000);
+    const out = await res.json();
+    if (out.ok) server = out.assenze;
+  } catch (e) { /* offline: si mostrano quelle salvate sul telefono */ }
+  const byId = new Map(server.map(a => [a.id, a]));
+  const list = db.assenze.map(a => Object.assign({}, a, byId.get(a.id) || { stato: 'Da inviare' }))
+    .concat(server.filter(a => !db.assenze.some(x => x.id === a.id)))
+    .sort((x, y) => (x.dal < y.dal ? 1 : -1));
+  openDialog(`
+    <h3>🌴 Ferie, permessi, malattia</h3>
+    <button class="btn" value="new">+ Nuova richiesta</button>
+    <div class="adm-list">${list.length ? list.map(a => `
+      <div class="extra-card">${absLine(a)} <span class="pill ${statoClass(a.stato)}">${esc(a.stato || 'Da approvare')}</span>
+        ${a.nota ? `<br><span>${esc(a.nota)}</span>` : ''}</div>`).join('') : '<p>Nessuna richiesta.</p>'}</div>
+    <button class="btn ghost" value="">Chiudi</button>`, a => { if (a === 'new') setTimeout(newAbsence, 50); });
+}
+function newAbsence(msg, prev) {
+  const v = prev || { tipo: 'Ferie', dal: todayIso(), al: todayIso(), ore: 2, nota: '' };
+  openDialog(`
+    <h3>Nuova richiesta</h3>
+    ${msg ? `<p class="err">${esc(msg)}</p>` : ''}
+    <div class="motivi">${TIPI_ASSENZA.map(t => `<label><input type="radio" name="tipo" value="${t}" ${v.tipo === t ? 'checked' : ''}> ${t}</label>`).join('')}</div>
+    <div class="row">
+      <label>Dal<input type="date" name="dal" value="${esc(v.dal)}" required></label>
+      <label id="lblAl">Al<input type="date" name="al" value="${esc(v.al)}"></label>
+      <label id="lblOre" hidden>Ore<input type="number" name="ore" min="0.5" max="8" step="0.5" value="${esc(v.ore)}"></label>
+    </div>
+    <label>Nota<textarea name="nota" rows="2" maxlength="300" placeholder="Es. visita medica, n. certificato…">${esc(v.nota)}</textarea></label>
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn" value="ok">Invia richiesta</button></div>`,
+    (a, fd) => {
+      if (a === 'back') return setTimeout(myAbsences, 50);
+      const x = { id: uid(), tipo: String(fd.get('tipo')), dal: String(fd.get('dal')), al: String(fd.get('al') || fd.get('dal')),
+        ore: Number(fd.get('ore')) || 0, nota: String(fd.get('nota') || '').trim() };
+      if (x.tipo === 'Permesso') x.al = x.dal;
+      if (x.al < x.dal) return setTimeout(() => newAbsence('La data "Al" deve essere uguale o dopo "Dal".', x), 50);
+      if (x.tipo === 'Permesso' && !(x.ore > 0)) return setTimeout(() => newAbsence('Indica quante ore di permesso.', x), 50);
+      db.assenze = (db.assenze || []).concat(x);
+      enqueue({ type: 'assenza', assenza: x });
+      save();
+      setTimeout(() => askAbsenceAuth(x), 50);
+    });
+  const sync = () => {
+    const perm = document.querySelector('#dlgBody [name=tipo]:checked').value === 'Permesso';
+    $('#lblAl').hidden = perm; $('#lblOre').hidden = !perm;
+  };
+  document.querySelectorAll('#dlgBody [name=tipo]').forEach(r => { r.onchange = sync; });
+  sync();
+}
+function askAbsenceAuth(x) {
+  const c = cfg();
+  const quando = x.tipo === 'Permesso' ? `${new Date(x.dal + 'T12:00:00').toLocaleDateString('it-IT')} – ${x.ore} ore`
+    : `dal ${new Date(x.dal + 'T12:00:00').toLocaleDateString('it-IT')} al ${new Date(x.al + 'T12:00:00').toLocaleDateString('it-IT')}`;
+  const text = [`*Richiesta ${x.tipo.toLowerCase()}*`, `Dipendente: ${fullName()}`, `Quando: ${quando}`, x.nota ? `Nota: ${x.nota}` : ''].filter(Boolean).join('\n');
+  const url = `https://wa.me/${c.autorizzaTelefono || ''}?text=${encodeURIComponent(text)}`;
+  openDialog(`
+    <h3>📲 Avvisa il responsabile</h3>
+    <p>Richiesta registrata. Manda il messaggio${c.autorizzaNome ? ' a <b>' + esc(c.autorizzaNome) + '</b>' : ''} su WhatsApp: è già scritto.</p>
+    <a class="btn big wa" href="${esc(url)}" target="_blank" rel="noopener">Invia su WhatsApp</a>
+    <button class="btn ghost" value="">Fatto</button>`);
+}
+
 // ---------- Pannello responsabile (password verificata dallo script) ----------
 let adminPwd = null; // solo in memoria: chiusa l'app, la password va reinserita
 let adminMonth = null; // 'AAAA-MM' scelto nel pannello
-let adminExtraCount = 0;
+let adminExtraCount = 0, adminAbsCount = 0;
 async function adminCall(azione, extra) {
   const res = await fetch(db.endpoint, { method: 'POST', body: JSON.stringify({ admin: Object.assign({ password: adminPwd, azione }, extra || {}) }) });
   return res.json();
@@ -634,7 +743,7 @@ function adminLogin(msg) {
       adminPwd = String(fd.get('pwd') || '');
       busy('Controllo password');
       adminCall('leggi').then(out => {
-        if (out.ok) { adminExtraCount = out.extraInAttesa || 0; adminHome(); }
+        if (out.ok) { adminExtraCount = out.extraInAttesa || 0; adminAbsCount = out.assenzeInAttesa || 0; adminHome(); }
         else if (out.error === 'nopass') { adminPwd = null; adminCreatePassword(); }
         else { adminPwd = null; adminLogin(out.msg || 'Errore.'); }
       }).catch(() => { adminPwd = null; adminLogin('Serve la connessione internet.'); });
@@ -667,6 +776,7 @@ function adminHome() {
       <button class="btn ghost" value="sites">🏗️ Cantieri: aggiungi, togli, rinomina</button>
       <button class="btn ghost" value="report">📊 Report del mese: PDF, stampa, email, condividi</button>
       <button class="btn ghost" value="extra">⏱️ Ore extra da autorizzare${adminExtraCount ? ` <span class="badge">${adminExtraCount}</span>` : ''}</button>
+      <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia${adminAbsCount ? ` <span class="badge">${adminAbsCount}</span>` : ''}</button>
       <button class="btn ghost" value="shifts">✏️ Modifica timbrature dei dipendenti</button>
       <button class="btn ghost" value="pwd">🔑 Cambia password</button>
       <button class="btn ghost danger-text" value="reset">🧹 Azzera tutto e parti da zero</button>
@@ -679,6 +789,7 @@ function adminHome() {
       report: adminReportPick,
       shifts: adminShiftsPick,
       extra: () => call('extra', null, 'Carico le richieste', out => adminExtra(out.extra)),
+      assenze: () => call('assenze', null, 'Carico ferie e permessi', out => adminAbsences(out.assenze)),
       pwd: adminChangePassword,
       reset: adminReset,
       logout: () => { adminPwd = null; toast('Uscito dall\'area responsabile'); },
@@ -759,11 +870,16 @@ function adminReportPick() {
   openDialog(`
     <h3>📊 Report del mese</h3>
     ${monthInput()}
+    <div class="motivi">
+      <label><input type="radio" name="tipo" value="dipendenti" ${adminReportType !== 'comuni' ? 'checked' : ''}> Per dipendente</label>
+      <label><input type="radio" name="tipo" value="comuni" ${adminReportType === 'comuni' ? 'checked' : ''}> Per comune</label>
+    </div>
     <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn" value="ok">Mostra</button></div>`,
     (a, fd) => {
       if (a === 'back') return setTimeout(adminHome, 50);
       adminMonth = String(fd.get('mese'));
-      setTimeout(() => call('report', monthParts(adminMonth), 'Preparo il report', adminReport), 50);
+      adminReportType = String(fd.get('tipo') || 'dipendenti');
+      setTimeout(() => call('report', Object.assign(monthParts(adminMonth), { tipo: adminReportType }), 'Preparo il report', adminReport), 50);
     });
 }
 const num = v => typeof v === 'number' ? String(v).replace('.', ',') : esc(v);
@@ -772,19 +888,19 @@ function reportTable(r) {
     ${r.righe.map(row => `<tr>${row.map(v => `<td>${num(v)}</td>`).join('')}</tr>`).join('')}
     <tr class="tot">${r.totale.map(v => `<td>${num(v)}</td>`).join('')}</tr></tbody></table>`;
 }
-let lastReport = null;
+let lastReport = null, adminReportType = 'dipendenti';
 function adminReport(r) {
   lastReport = r;
   openDialog(`
-    <h3>Ore del personale – ${esc(r.nomeMese)}</h3>
+    <h3>${adminReportType === 'comuni' ? 'Servizi per comune' : 'Ore del personale'} – ${esc(r.nomeMese)}</h3>
     ${r.righe.length ? `<div class="rep-wrap">${reportTable(r)}</div>` : '<p>Nessuna timbratura in questo mese.</p>'}
     <div class="menu">
       <button class="btn" value="pdf">📄 Scarica / condividi PDF</button>
       <button class="btn ghost" value="print">🖨️ Stampa</button>
-      <button class="btn ghost" value="email">📧 Invia per email al responsabile</button>
+      <button class="btn ghost" value="email">📧 Invia per email (dipendenti + comuni)</button>
       <button class="btn ghost" value="back">Indietro</button>
     </div>`, a => {
-    const p = monthParts(adminMonth);
+    const p = Object.assign(monthParts(adminMonth), { tipo: adminReportType });
     if (a === 'back') setTimeout(adminHome, 50);
     if (a === 'print') setTimeout(() => printReport(r), 50);
     if (a === 'email') setTimeout(() => call('email', p, 'Invio l\'email', () => { toast('Email inviata ✓'); adminReport(r); }), 50);
@@ -804,7 +920,7 @@ async function sharePdf(out) {
 }
 function printReport(r) {
   $('#printArea').innerHTML = `<img src="logo.png" alt="GE3CO" class="print-logo">
-    <h1>Ore del personale – ${esc(r.nomeMese)}</h1>${reportTable(r)}
+    <h1>${adminReportType === 'comuni' ? 'Servizi per comune' : 'Ore del personale'} – ${esc(r.nomeMese)}</h1>${reportTable(r)}
     <p class="print-foot">Stampato il ${new Date().toLocaleDateString('it-IT')}</p>`;
   if (dlg.open) dlg.close();
   setTimeout(() => { window.print(); setTimeout(() => adminReport(r), 300); }, 100);
@@ -830,6 +946,29 @@ function adminExtra(list) {
   document.querySelectorAll('[data-dec]').forEach(b => {
     b.onclick = () => call('decidi', { id: b.dataset.id, approva: b.dataset.dec === 'ok' }, 'Salvo',
       out => { toast(b.dataset.dec === 'ok' ? 'Ore extra autorizzate ✓' : 'Ore extra non autorizzate'); adminExtra(out.extra); });
+  });
+}
+
+// --- Ferie e permessi
+function adminAbsences(list) {
+  const pending = list.filter(a => a.stato === 'Da approvare');
+  const others = list.filter(a => a.stato !== 'Da approvare').slice(0, 40);
+  adminAbsCount = pending.length;
+  const card = (a, buttons) => `<div class="extra-card"><b>${esc(a.dip)}</b> · ${absLine(a)}
+      ${a.tipo !== 'Permesso' && a.giorni ? ` · ${a.giorni} giorn${a.giorni === 1 ? 'o' : 'i'}` : ''}
+      ${buttons ? '' : ` <span class="pill ${statoClass(a.stato)}">${esc(a.stato)}</span>`}
+      ${a.nota ? `<br><span>${esc(a.nota)}</span>` : ''}
+      ${buttons ? `<div class="row"><button type="button" class="btn ghost" data-ass="no" data-id="${esc(a.id)}">Rifiuta</button>
+        <button type="button" class="btn" data-ass="ok" data-id="${esc(a.id)}">Approva</button></div>` : ''}</div>`;
+  openDialog(`
+    <h3>🌴 Ferie, permessi, malattia</h3>
+    <p><b>Da approvare</b></p>
+    <div class="adm-list">${pending.length ? pending.map(a => card(a, true)).join('') : '<p>Nessuna richiesta in attesa. 👍</p>'}</div>
+    ${others.length ? `<p><b>Già decise</b></p><div class="adm-list">${others.map(a => card(a, false)).join('')}</div>` : ''}
+    <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(adminHome, 50));
+  document.querySelectorAll('[data-ass]').forEach(b => {
+    b.onclick = () => call('decidiassenza', { id: b.dataset.id, approva: b.dataset.ass === 'ok' }, 'Salvo',
+      out => { toast(b.dataset.ass === 'ok' ? 'Richiesta approvata ✓' : 'Richiesta rifiutata'); adminAbsences(out.assenze); });
   });
 }
 
@@ -866,6 +1005,12 @@ function adminShiftList(filter) {
   $('#admWho').onchange = e => adminShiftList(e.target.value);
   document.querySelectorAll('[data-sid]').forEach(b => { b.onclick = () => adminShiftEdit(b.dataset.sid, filter); });
 }
+function posLinks(t) {
+  const one = (label, v) => !v ? '' : /^https:/.test(v)
+    ? `<a class="btn ghost" href="${esc(v.split(' ')[0])}" target="_blank" rel="noopener">📍 ${label} sulla mappa${v.includes('±') ? ' ' + esc(v.slice(v.indexOf('('))) : ''}</a>`
+    : `<p class="note">📍 ${label}: ${esc(v)}</p>`;
+  return one('Entrata', t.posIn) + one('Uscita', t.posOut);
+}
 function adminShiftEdit(id, filter) {
   const t = adminShifts.find(x => x.id === id);
   const names = adminSitesList.map(c => c.nome);
@@ -875,6 +1020,7 @@ function adminShiftEdit(id, filter) {
     <label>Cantiere<select name="site">${names.map(n => `<option ${n === t.cantiere ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
     <label>Entrata<input type="datetime-local" name="start" required value="${toLocalInput(t.start)}"></label>
     <label>Uscita<input type="datetime-local" name="end" value="${t.end ? toLocalInput(t.end) : ''}"></label>
+    ${posLinks(t)}
     <div class="row">
       <button class="btn ghost" value="delete" formnovalidate style="color:var(--danger)">Elimina</button>
       <button class="btn ghost" value="back" formnovalidate>Indietro</button>

@@ -22,9 +22,14 @@ const AUTORIZZA_TELEFONO = 'INSERISCI_TELEFONO';
 
 const FOGLIO_TIMBRATURE = 'Timbrature';
 const INTESTAZIONE = ['ID', 'Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Ore', 'Stato', 'Telefono', 'Aggiornato',
-  'Extra (ore)', 'Motivo extra', 'Nota extra', 'Stato extra'];
-// Indici (base 1) delle colonne extra
-const COL_EXTRA = 11, COL_MOTIVO = 12, COL_NOTA = 13, COL_STATO_EXTRA = 14;
+  'Extra (ore)', 'Motivo extra', 'Nota extra', 'Stato extra', 'Posizione entrata', 'Posizione uscita'];
+// Indici (base 1) delle colonne extra e posizione
+const COL_EXTRA = 11, COL_MOTIVO = 12, COL_NOTA = 13, COL_STATO_EXTRA = 14, COL_POS_IN = 15, COL_POS_OUT = 16;
+
+// Assenze (ferie, permessi, malattia)
+const FOGLIO_ASSENZE = 'Assenze';
+const INTEST_ASSENZE = ['ID', 'Dipendente', 'Tipo', 'Dal', 'Al', 'Giorni', 'Ore permesso', 'Nota', 'Stato', 'Richiesta il', 'Telefono'];
+const ASS_ATTESA = 'Da approvare', ASS_OK = 'Approvata', ASS_NO = 'Rifiutata';
 const EXTRA_ATTESA = 'Da autorizzare', EXTRA_OK = 'Autorizzato', EXTRA_NO = 'Non autorizzato';
 
 function ss_() { return SpreadsheetApp.openById(ID_FOGLIO); }
@@ -34,8 +39,10 @@ function configura() {
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('onOpen').forSpreadsheet(ID_FOGLIO).onOpen().create();
   ScriptApp.newTrigger('inviaRiepilogoMeseScorso').timeBased().onMonthDay(1).atHour(7).create();
+  ScriptApp.newTrigger('avvisoSerale').timeBased().everyDays(1).atHour(20).create();
   foglio_();
   foglioCantieri_();
+  foglioAssenze_();
 }
 
 // ---------- Ricezione dall'app ----------
@@ -51,6 +58,7 @@ function doPost(e) {
     ops.forEach(op => {
       if (op.type === 'upsert') upsert_(op.shift, body.user);
       else if (op.type === 'delete') remove_(op.id);
+      else if (op.type === 'assenza') salvaAssenza_(op.assenza, body.user);
       ok.push(op.opId);
     });
     return json_({ ok: true, done: ok });
@@ -63,6 +71,9 @@ function doPost(e) {
 
 // Apri l'URL della web app nel browser per verificare che funzioni.
 function doGet(e) {
+  if (e && e.parameter && e.parameter.azione === 'assenze') {
+    return json_({ ok: true, assenze: assenze_().filter(a => a.device && a.device === String(e.parameter.device || '')) });
+  }
   if (e && e.parameter && e.parameter.azione === 'cantieri') {
     return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), config: {
       oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN,
@@ -126,11 +137,11 @@ function admin_(req) {
   switch (req.azione) {
     case 'salva': salvaCantieri_(req.cantieri); return { ok: true, cantieri: tuttiCantieri_() };
     case 'report': {
-      const r = creaRiepilogo_(anno, mese);
+      const r = req.tipo === 'comuni' ? creaComuni_(anno, mese) : creaRiepilogo_(anno, mese);
       return { ok: true, nomeMese: r.nomeMese, intest: r.intest, righe: r.righe, totale: r.totale };
     }
     case 'pdf': {
-      const r = creaRiepilogo_(anno, mese);
+      const r = req.tipo === 'comuni' ? creaComuni_(anno, mese) : creaRiepilogo_(anno, mese);
       SpreadsheetApp.flush();
       const blob = esporta_(r.sheetId, 'pdf');
       return { ok: true, nome: 'GE3CO ' + r.titolo + '.pdf', base64: Utilities.base64Encode(blob.getBytes()) };
@@ -141,6 +152,8 @@ function admin_(req) {
     case 'elimina': remove_(req.id); return { ok: true };
     case 'extra': return { ok: true, extra: extraInAttesa_() };
     case 'azzera': azzera_(); return { ok: true };
+    case 'assenze': return { ok: true, assenze: assenze_() };
+    case 'decidiassenza': decidiAssenza_(req.id, !!req.approva); return { ok: true, assenze: assenze_() };
     case 'decidi': decidiExtra_(req.id, !!req.approva); return { ok: true, extra: extraInAttesa_() };
     case 'cambiapassword': {
       const nuova = String(req.nuova || '');
@@ -148,7 +161,8 @@ function admin_(req) {
       props.setProperty('PASSWORD_ADMIN', nuova);
       return { ok: true };
     }
-    default: return { ok: true, cantieri: tuttiCantieri_(), extraInAttesa: extraInAttesa_().length };
+    default: return { ok: true, cantieri: tuttiCantieri_(), extraInAttesa: extraInAttesa_().length,
+      assenzeInAttesa: assenze_().filter(a => a.stato === ASS_ATTESA).length };
   }
 }
 
@@ -166,7 +180,8 @@ function timbratureMese_(anno, mese) {
     .filter(r => r[4] instanceof Date && r[4] >= da && r[4] < a)
     .map(r => ({ id: String(r[0]), dip: String(r[1]), cantiere: String(r[3]),
       start: r[4].getTime(), end: r[5] instanceof Date ? r[5].getTime() : null,
-      extra: Number(r[COL_EXTRA - 1]) || 0, statoExtra: String(r[COL_STATO_EXTRA - 1] || '') }))
+      extra: Number(r[COL_EXTRA - 1]) || 0, statoExtra: String(r[COL_STATO_EXTRA - 1] || ''),
+      posIn: String(r[COL_POS_IN - 1] || ''), posOut: String(r[COL_POS_OUT - 1] || '') }))
     .sort((x, y) => y.start - x.start);
 }
 
@@ -283,8 +298,10 @@ function upsert_(s, user) {
     statoExtra = (vecchio === EXTRA_OK || vecchio === EXTRA_NO) && vecchiExtra === round2_(extraMin / 60) ? vecchio : EXTRA_ATTESA;
   }
 
+  const posIn = mappa_(s.posIn) || (prima && prima[COL_POS_IN - 1]) || '';
+  const posOut = s.end ? (mappa_(s.posOut) || (prima && prima[COL_POS_OUT - 1]) || '') : '';
   const row = [s.id, nome, giorno, s.site || '', start, end, ore, s.end ? 'Chiuso' : 'In corso', user && user.device || '', new Date(),
-    extraMin ? round2_(extraMin / 60) : '', extraMin ? motivo : '', extraMin ? nota : '', statoExtra];
+    extraMin ? round2_(extraMin / 60) : '', extraMin ? motivo : '', extraMin ? nota : '', statoExtra, posIn, posOut];
   if (r) sh.getRange(r, 1, 1, row.length).setValues([row]);
   else { sh.appendRow(row); r = sh.getLastRow(); }
   sh.getRange(r, 3).setNumberFormat('dd/mm/yyyy');
@@ -315,10 +332,21 @@ function azzera_() {
     arch.hideSheet();
     sh.deleteRows(2, n);
   }
-  ss.getSheets().filter(x => x.getName().indexOf('Riepilogo ') === 0).forEach(x => ss.deleteSheet(x));
+  ss.getSheets().filter(x => /^(Riepilogo|Comuni) /.test(x.getName())).forEach(x => ss.deleteSheet(x));
+  const shA = foglioAssenze_();
+  if (shA.getLastRow() > 1) shA.deleteRows(2, shA.getLastRow() - 1);
   const vuoto = ss.getSheetByName('Foglio1');
   if (vuoto && vuoto.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(vuoto);
   PropertiesService.getScriptProperties().setProperty('RESET_AT', String(Date.now()));
+}
+
+// Posizione GPS -> link a Google Maps (o il motivo per cui manca)
+function mappa_(p) {
+  if (!p) return '';
+  if (p.errore) return 'Non disponibile (' + String(p.errore).slice(0, 40) + ')';
+  const lat = Number(p.lat), lng = Number(p.lng);
+  if (!isFinite(lat) || !isFinite(lng)) return '';
+  return 'https://maps.google.com/?q=' + lat.toFixed(6) + ',' + lng.toFixed(6) + (p.acc ? ' (±' + Math.round(p.acc) + ' m)' : '');
 }
 
 function extraInAttesa_() {
@@ -374,8 +402,7 @@ function creaRiepilogo_(anno, mese) {
   const ss = ss_();
   const sh = foglio_();
   const da = new Date(anno, mese, 1), a = new Date(anno, mese + 1, 1);
-  const MESI = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
-  const nomeMese = MESI[mese] + ' ' + anno;
+  const nomeMese = MESI_[mese] + ' ' + anno;
   const dati = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, INTESTAZIONE.length).getValues() : [];
 
   // Ogni turno chiuso vale ORE_TURNO ore fisse; gli extra contano solo se autorizzati.
@@ -398,35 +425,187 @@ function creaRiepilogo_(anno, mese) {
   });
 
   const listaCantieri = Array.from(cantieri).sort();
-  const nomi = Object.keys(perDip).sort();
+  // Assenze approvate nel mese
+  const ass = assenzeMese_(anno, mese);
+  Object.keys(ass).forEach(n => { if (!perDip[n]) perDip[n] = { turni: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0 }; });
+  const nomiTutti = Object.keys(perDip).sort();
   const intest = ['Dipendente', 'Giorni', 'Turni', 'Ore turni (' + ORE_TURNO + 'h)', 'Extra autorizzati', 'TOTALE ORE',
-    'Extra da autorizzare', 'Extra non autorizzati', 'Turni non chiusi'].concat(listaCantieri.map(c => c + ' (turni)'));
-  const righe = nomi.map(n => {
-    const p = perDip[n];
+    'Extra da autorizzare', 'Extra non autorizzati', 'Turni non chiusi', 'Giorni ferie', 'Ore permesso', 'Giorni malattia']
+    .concat(listaCantieri.map(c => c + ' (turni)'));
+  const righe = nomiTutti.map(n => {
+    const p = perDip[n], a = ass[n] || { ferie: 0, permesso: 0, malattia: 0 };
     const base = p.turni * ORE_TURNO;
     return [n, p.giorni.size, p.turni, base, round2_(p.extraOk), round2_(base + p.extraOk),
-      round2_(p.extraAttesa), round2_(p.extraNo), p.aperti].concat(listaCantieri.map(c => p.cantieri[c] || 0));
+      round2_(p.extraAttesa), round2_(p.extraNo), p.aperti, a.ferie, round2_(a.permesso), a.malattia]
+      .concat(listaCantieri.map(c => p.cantieri[c] || 0));
   });
   const somma = i => round2_(righe.reduce((t, r) => t + (Number(r[i]) || 0), 0));
-  const totale = ['TOTALE', '', somma(2), somma(3), somma(4), somma(5), somma(6), somma(7), somma(8)]
-    .concat(listaCantieri.map((c, i) => somma(9 + i)));
+  const totale = ['TOTALE', '', somma(2), somma(3), somma(4), somma(5), somma(6), somma(7), somma(8), somma(9), somma(10), somma(11)]
+    .concat(listaCantieri.map((c, i) => somma(12 + i)));
 
   const titolo = 'Riepilogo ' + anno + '-' + ('0' + (mese + 1)).slice(-2);
-  let out = ss.getSheetByName(titolo);
-  if (out) out.clear(); else out = ss.insertSheet(titolo);
-  out.getRange(1, 1).setValue('Riepilogo ore – ' + nomeMese).setFontWeight('bold').setFontSize(14);
-  out.getRange(3, 1, 1, intest.length).setValues([intest]).setFontWeight('bold').setBackground('#e7f2ea');
-  if (righe.length) out.getRange(4, 1, righe.length, intest.length).setValues(righe);
-  out.getRange(4 + righe.length, 1, 1, intest.length).setValues([totale]).setFontWeight('bold');
-  out.getRange(4, 4, righe.length + 1, 5).setNumberFormat('0.00');
+  const out = scriviTabella_(titolo, 'Riepilogo ore – ' + nomeMese, intest, righe, totale, [4, 5, 6, 7, 8, 11]);
   out.getRange(3, 6, righe.length + 2, 1).setFontWeight('bold');
-  out.setFrozenRows(3);
-  out.autoResizeColumns(1, intest.length);
-  
   return { titolo, nomeMese, intest, righe, totale, sheetId: out.getSheetId() };
 }
 
 function round2_(n) { return Math.round(n * 100) / 100; }
+
+const MESI_ = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+
+/** Scrive una tabella di riepilogo in un foglio (lo ricrea da zero). */
+function scriviTabella_(titolo, intestazione, intest, righe, totale, colOre) {
+  const ss = ss_();
+  let out = ss.getSheetByName(titolo);
+  if (out) out.clear(); else out = ss.insertSheet(titolo);
+  out.getRange(1, 1).setValue(intestazione).setFontWeight('bold').setFontSize(14);
+  out.getRange(3, 1, 1, intest.length).setValues([intest]).setFontWeight('bold').setBackground('#e7f2ea');
+  if (righe.length) out.getRange(4, 1, righe.length, intest.length).setValues(righe);
+  out.getRange(4 + righe.length, 1, 1, intest.length).setValues([totale]).setFontWeight('bold');
+  colOre.forEach(c => out.getRange(4, c, righe.length + 1, 1).setNumberFormat('0.00'));
+  out.setFrozenRows(3);
+  out.autoResizeColumns(1, intest.length);
+  return out;
+}
+
+/** Riepilogo per comune/cantiere: servizi, ore, operatori (utile per la fatturazione). */
+function creaComuni_(anno, mese) {
+  const sh = foglio_();
+  const da = new Date(anno, mese, 1), a = new Date(anno, mese + 1, 1);
+  const nomeMese = MESI_[mese] + ' ' + anno;
+  const dati = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, INTESTAZIONE.length).getValues() : [];
+  const per = {};
+  dati.forEach(r => {
+    const dip = r[1], giorno = r[2], cantiere = r[3], stato = r[7];
+    if (!(giorno instanceof Date) || giorno < da || giorno >= a || stato !== 'Chiuso') return;
+    const c = per[cantiere] || (per[cantiere] = { servizi: 0, giorni: new Set(), extra: 0, operatori: new Set() });
+    c.servizi++;
+    c.giorni.add(giorno.getTime());
+    c.operatori.add(dip);
+    if (r[COL_STATO_EXTRA - 1] === EXTRA_OK) c.extra += Number(r[COL_EXTRA - 1]) || 0;
+  });
+  const intest = ['Comune / cantiere', 'Giorni di servizio', 'Servizi (turni)', 'Ore turni (' + ORE_TURNO + 'h)', 'Extra autorizzati', 'TOTALE ORE', 'Operatori'];
+  const righe = Object.keys(per).sort().map(n => {
+    const c = per[n], base = c.servizi * ORE_TURNO;
+    return [n, c.giorni.size, c.servizi, base, round2_(c.extra), round2_(base + c.extra), Array.from(c.operatori).sort().join(', ')];
+  });
+  const somma = i => round2_(righe.reduce((t, r) => t + (Number(r[i]) || 0), 0));
+  const totale = ['TOTALE', somma(1), somma(2), somma(3), somma(4), somma(5), ''];
+  const titolo = 'Comuni ' + anno + '-' + ('0' + (mese + 1)).slice(-2);
+  const out = scriviTabella_(titolo, 'Servizi per comune – ' + nomeMese, intest, righe, totale, [4, 5, 6]);
+  return { titolo, nomeMese, intest, righe, totale, sheetId: out.getSheetId() };
+}
+
+// ---------- Assenze ----------
+
+function foglioAssenze_() {
+  const ss = ss_();
+  let sh = ss.getSheetByName(FOGLIO_ASSENZE);
+  if (!sh) {
+    sh = ss.insertSheet(FOGLIO_ASSENZE);
+    sh.appendRow(INTEST_ASSENZE);
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, INTEST_ASSENZE.length).setFontWeight('bold').setBackground('#e7f2ea');
+    sh.hideColumns(1);
+    sh.getRange('D:E').setNumberFormat('dd/mm/yyyy');
+    sh.getRange('J:J').setNumberFormat('dd/mm/yyyy HH:mm');
+  }
+  return sh;
+}
+
+// Giorni lavorativi (lunedì–sabato) tra due date incluse, eventualmente limitati a un mese
+function giorniLavorativi_(dal, al, da, a) {
+  let n = 0;
+  const d = new Date(dal.getFullYear(), dal.getMonth(), dal.getDate());
+  const fine = new Date(al.getFullYear(), al.getMonth(), al.getDate());
+  for (; d <= fine; d.setDate(d.getDate() + 1)) {
+    if (d.getDay() === 0) continue;
+    if (da && (d < da || d >= a)) continue;
+    n++;
+  }
+  return n;
+}
+
+function salvaAssenza_(x, user) {
+  if (!x || !x.id || !x.dal) return;
+  const sh = foglioAssenze_();
+  const tipo = ['Ferie', 'Permesso', 'Malattia'].indexOf(x.tipo) >= 0 ? x.tipo : 'Ferie';
+  const dal = new Date(x.dal + 'T00:00:00'), al = new Date((x.al || x.dal) + 'T00:00:00');
+  if (isNaN(dal) || isNaN(al) || al < dal) return;
+  const ore = tipo === 'Permesso' ? Math.max(0, Math.min(24, Number(x.ore) || 0)) : '';
+  const giorni = tipo === 'Permesso' ? '' : giorniLavorativi_(dal, al);
+  const r = trovaRiga_(sh, x.id);
+  const stato = r ? sh.getRange(r, 9).getValue() : ASS_ATTESA;
+  const row = [x.id, user && user.name || 'Sconosciuto', tipo, dal, al, giorni, ore, String(x.nota || '').slice(0, 300), stato, new Date(), user && user.device || ''];
+  if (r) sh.getRange(r, 1, 1, row.length).setValues([row]);
+  else sh.appendRow(row);
+}
+
+function assenze_() {
+  const sh = foglioAssenze_();
+  if (sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, INTEST_ASSENZE.length).getValues()
+    .filter(r => r[0])
+    .map(r => ({ id: String(r[0]), dip: String(r[1]), tipo: String(r[2]),
+      dal: r[3] instanceof Date ? Utilities.formatDate(r[3], Session.getScriptTimeZone(), 'yyyy-MM-dd') : '',
+      al: r[4] instanceof Date ? Utilities.formatDate(r[4], Session.getScriptTimeZone(), 'yyyy-MM-dd') : '',
+      giorni: Number(r[5]) || 0, ore: Number(r[6]) || 0, nota: String(r[7] || ''), stato: String(r[8] || ''),
+      device: String(r[10] || '') }))
+    .sort((a, b) => (a.dal < b.dal ? 1 : -1));
+}
+
+function decidiAssenza_(id, ok) {
+  const sh = foglioAssenze_();
+  const r = trovaRiga_(sh, id);
+  if (r) sh.getRange(r, 9).setValue(ok ? ASS_OK : ASS_NO);
+}
+
+/** Assenze approvate nel mese, per dipendente: giorni ferie, ore permesso, giorni malattia. */
+function assenzeMese_(anno, mese) {
+  const da = new Date(anno, mese, 1), a = new Date(anno, mese + 1, 1);
+  const out = {};
+  const sh = foglioAssenze_();
+  if (sh.getLastRow() < 2) return out;
+  sh.getRange(2, 1, sh.getLastRow() - 1, INTEST_ASSENZE.length).getValues().forEach(r => {
+    if (r[8] !== ASS_OK || !(r[3] instanceof Date) || !(r[4] instanceof Date)) return;
+    const p = out[r[1]] || (out[r[1]] = { ferie: 0, permesso: 0, malattia: 0 });
+    if (r[2] === 'Permesso') { if (r[3] >= da && r[3] < a) p.permesso += Number(r[6]) || 0; }
+    else {
+      const g = giorniLavorativi_(r[3], r[4], da, a);
+      if (r[2] === 'Malattia') p.malattia += g; else p.ferie += g;
+    }
+  });
+  return out;
+}
+
+// ---------- Avviso serale ----------
+
+/** Ogni sera alle 20: email al responsabile solo se c'è qualcosa da sistemare. */
+function avvisoSerale() {
+  const sh = foglio_();
+  const oggi = new Date(); oggi.setHours(0, 0, 0, 0);
+  const dati = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, INTESTAZIONE.length).getValues() : [];
+  const aperti = dati.filter(r => r[7] === 'In corso' && r[4] instanceof Date);
+  const extra = extraInAttesa_();
+  const ass = assenze_().filter(a => a.stato === ASS_ATTESA);
+  if (!aperti.length && !extra.length && !ass.length) return;
+  const tz = Session.getScriptTimeZone();
+  const f = d => Utilities.formatDate(d, tz, 'dd/MM HH:mm');
+  const li = arr => '<ul>' + arr.map(x => '<li>' + x + '</li>').join('') + '</ul>';
+  let html = '<p>Situazione di oggi su Timbra Cantieri:</p>';
+  if (aperti.length) html += '<h3>Uscite non timbrate (' + aperti.length + ')</h3>' +
+    li(aperti.map(r => '<b>' + r[1] + '</b> · ' + r[3] + ' · entrata ' + f(r[4])));
+  if (extra.length) html += '<h3>Ore extra da autorizzare (' + extra.length + ')</h3>' +
+    li(extra.map(x => '<b>' + x.dip + '</b> · ' + x.cantiere + ' · +' + String(x.extra).replace('.', ',') + ' h · ' + (x.motivo || '') + (x.nota ? ' – ' + x.nota : '')));
+  if (ass.length) html += '<h3>Ferie e permessi da approvare (' + ass.length + ')</h3>' +
+    li(ass.map(x => '<b>' + x.dip + '</b> · ' + x.tipo + ' · ' + x.dal + (x.al && x.al !== x.dal ? ' → ' + x.al : '') + (x.ore ? ' · ' + x.ore + ' h' : '')));
+  html += '<p>Si sistemano dall\'app: tieni premuto il logo GE3CO → Area responsabile.</p>';
+  MailApp.sendEmail({
+    to: EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail(),
+    subject: 'GE3CO – Da sistemare oggi (' + (aperti.length + extra.length + ass.length) + ')',
+    htmlBody: html,
+  });
+}
 
 function inviaRiepilogoMeseScorso() {
   const d = new Date();
@@ -434,20 +613,25 @@ function inviaRiepilogoMeseScorso() {
   inviaRiepilogo_(d.getFullYear(), d.getMonth());
 }
 
-function inviaRiepilogo_(anno, mese) {
-  const r = creaRiepilogo_(anno, mese);
-  const ss = ss_();
-  const link = ss.getUrl() + '#gid=' + r.sheetId;
-
+function tabellaHtml_(r) {
   const td = 'style="border:1px solid #ddd;padding:6px 10px"';
-  const tabella = '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px">' +
+  return '<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px">' +
     '<tr>' + r.intest.map(h => '<th ' + td + ' bgcolor="#e7f2ea">' + h + '</th>').join('') + '</tr>' +
     r.righe.concat([r.totale]).map(row => '<tr>' + row.map(v => '<td ' + td + '>' + (typeof v === 'number' ? String(v).replace('.', ',') : v) + '</td>').join('') + '</tr>').join('') +
     '</table>';
+}
 
-  // Allegato Excel del foglio riepilogo
+function inviaRiepilogo_(anno, mese) {
+  const r = creaRiepilogo_(anno, mese);
+  const c = creaComuni_(anno, mese);
+  const ss = ss_();
+  const link = ss.getUrl() + '#gid=' + r.sheetId;
+  const tabella = tabellaHtml_(r) + '<h3>Servizi per comune</h3>' + tabellaHtml_(c);
+
+  // Allegati Excel dei due riepiloghi
   SpreadsheetApp.flush();
   const xlsx = esporta_(r.sheetId, 'xlsx').setName(r.titolo + '.xlsx');
+  const xlsxC = esporta_(c.sheetId, 'xlsx').setName(c.titolo + '.xlsx');
 
   MailApp.sendEmail({
     to: EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail(),
@@ -457,7 +641,7 @@ function inviaRiepilogo_(anno, mese) {
       '<p>Ogni turno vale ' + ORE_TURNO + ' ore; le ore extra contano solo se autorizzate.</p>' +
       (r.righe.some(x => x[8] > 0) ? '<p><b>Attenzione:</b> alcuni turni risultano non chiusi (uscita mancante).</p>' : '') +
       (r.righe.some(x => x[6] > 0) ? '<p><b>Attenzione:</b> ci sono ore extra ancora da autorizzare.</p>' : ''),
-    attachments: [xlsx],
+    attachments: [xlsx, xlsxC],
   });
 }
 
