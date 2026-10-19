@@ -19,3 +19,7 @@ I dati restano nel browser del telefono (localStorage). Fai un backup ogni tanto
 Sito statico, nessuna build: `index.html`, `style.css`, `app.js`, `sw.js`.
 Prova in locale con `python3 -m http.server 8765`.
 A ogni rilascio cambia `VERSION` in `sw.js`.
+
+## Registro aziendale e riepilogo mensile
+Le timbrature di tutti i dipendenti possono arrivare in un Google Sheet, con email di riepilogo il 1° del mese.
+Istruzioni: [google-sheet/GUIDA-GOOGLE-SHEET.md](google-sheet/GUIDA-GOOGLE-SHEET.md).

@@ -26,9 +26,11 @@ function load() {
   };
 }
 let db = load();
+db.queue = db.queue || [];
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('Impossibile salvare su questo telefono'); }
   render();
+  setTimeout(flush, 0);
 }
 const siteById = id => db.sites.find(s => s.id === id) || { name: 'Cantiere eliminato', color: '#999' };
 
@@ -59,20 +61,23 @@ const toLocalInput = t => { const d = new Date(t); return `${d.getFullYear()}-${
 // ---------- Timbrature ----------
 function clockIn(siteId) {
   if (db.active) return;
-  db.active = { siteId, start: Date.now() };
+  db.active = { id: uid(), siteId, start: Date.now() };
+  enqueueUpsert({ id: db.active.id, siteId, start: db.active.start, end: null });
   save();
   return db.active;
 }
 function clockOut() {
   if (!db.active) return null;
-  const shift = { id: uid(), siteId: db.active.siteId, start: db.active.start, end: Date.now() };
+  const shift = { id: db.active.id || uid(), siteId: db.active.siteId, start: db.active.start, end: Date.now() };
   const prevActive = db.active;
   db.shifts.unshift(shift);
   db.active = null;
+  enqueueUpsert(shift);
   save();
   shift.undo = () => {
     db.shifts = db.shifts.filter(s => s.id !== shift.id);
     db.active = prevActive;
+    enqueueUpsert({ id: shift.id, siteId: shift.siteId, start: shift.start, end: null });
     save();
   };
   toast(`Uscita ${siteById(shift.siteId).name} · ${fmtDur(shift.end - shift.start)}`, shift.undo);
@@ -207,11 +212,13 @@ function editShift(id) {
     if (action === 'delete') {
       if (!confirm('Eliminare questa timbratura?')) return false;
       db.shifts = db.shifts.filter(x => x.id !== id);
+      enqueueDelete(id);
     } else {
       const start = new Date(fd.get('start')).getTime();
       const end = new Date(fd.get('end')).getTime();
       if (!(end > start)) { alert("L'uscita deve essere dopo l'entrata."); return false; }
       Object.assign(s, { siteId: fd.get('site') || s.siteId, start, end });
+      enqueueUpsert(s);
       db.shifts.sort((a, b) => b.start - a.start);
     }
     save();
@@ -225,7 +232,7 @@ function pickSiteForNfc() {
     <div class="pick">${db.sites.map(s => `<button value="${s.id}"><span class="dot" style="background:${esc(s.color)}"></span>${esc(s.name)}</button>`).join('')}</div>
     <button class="btn ghost" value="">Annulla</button>`, siteId => {
     clockIn(siteId);
-    const undo = () => { db.active = null; save(); };
+    const undo = () => { if (db.active) enqueueDelete(db.active.id); db.active = null; save(); };
     setTimeout(() => showBigOk('Entrata', siteById(siteId).name, `alle ${fmtTime(db.active.start)}`, undo), 50);
   });
 }
@@ -311,7 +318,8 @@ function importBackup() {
       const data = JSON.parse(await inp.files[0].text());
       if (!Array.isArray(data.sites) || !Array.isArray(data.shifts)) throw new Error();
       if (!confirm('Sostituire tutti i dati attuali con quelli del backup?')) return;
-      db = { sites: data.sites, shifts: data.shifts, active: data.active || null, user: data.user || db.user };
+      db = { sites: data.sites, shifts: data.shifts, active: data.active || null, user: data.user || db.user, endpoint: db.endpoint, queue: [] };
+      resyncAll();
       save(); toast('Backup ripristinato');
     } catch (e) { alert('File di backup non valido.'); }
   };
@@ -319,6 +327,7 @@ function importBackup() {
 }
 $('#btnMenu').onclick = () => openDialog(`
   <h3>Menu</h3>
+  <p>${esc(syncStatus())}</p>
   <div class="menu">
     <button class="btn" value="share">📤 Invia timbrature del mese</button>
     <button class="btn ghost" value="csv">⬇︎ Esporta tutte le timbrature (Excel)</button>
@@ -373,7 +382,9 @@ function editProfile(then) {
     const cap = v => String(v || '').trim().replace(/\s+/g, ' ').replace(/(^|[\s'-])\S/g, c => c.toUpperCase());
     const f = cap(fd.get('first')), l = cap(fd.get('last'));
     if (!f || !l) return false;
-    db.user = { first: f, last: l };
+    const changed = db.user && (db.user.first !== f || db.user.last !== l);
+    db.user = { first: f, last: l, device: (db.user && db.user.device) || uid() };
+    if (changed) resyncAll();
     save();
     if (then) setTimeout(then, 50);
   });
@@ -382,8 +393,78 @@ function editProfile(then) {
 }
 $('#btnWho').onclick = () => editProfile();
 
+// ---------- Registro aziendale (Google Sheet) ----------
+// Ogni modifica va in coda e viene inviata appena c'è rete: funziona anche senza campo.
+function enqueue(op) {
+  op.opId = uid();
+  // Per la stessa timbratura conta solo l'ultima operazione.
+  const key = op.shift ? op.shift.id : op.id;
+  db.queue = db.queue.filter(o => (o.shift ? o.shift.id : o.id) !== key);
+  db.queue.push(op);
+}
+function enqueueUpsert(s) {
+  enqueue({ type: 'upsert', shift: { id: s.id, start: s.start, end: s.end || null, site: siteById(s.siteId).name } });
+}
+function enqueueDelete(id) { enqueue({ type: 'delete', id }); }
+function resyncAll() {
+  const from = Date.now() - 62 * 864e5; // ultimi 2 mesi
+  db.shifts.filter(s => s.start >= from).forEach(enqueueUpsert);
+  if (db.active) enqueueUpsert({ id: db.active.id, siteId: db.active.siteId, start: db.active.start, end: null });
+}
+function syncStatus() {
+  if (!db.endpoint) return 'Registro aziendale: non collegato.';
+  if (!db.queue.length) return 'Registro aziendale: collegato ✓ tutto inviato.';
+  return `Registro aziendale: collegato, ${db.queue.length} da inviare (partono appena c'è rete).`;
+}
+let flushing = false;
+async function flush() {
+  if (flushing || !db.endpoint || !db.queue.length || !db.user || navigator.onLine === false) return;
+  flushing = true;
+  try {
+    const ops = db.queue.slice(0, 50);
+    // Corpo text/plain: richiesta "semplice", Google Apps Script la accetta senza preflight CORS.
+    const res = await fetch(db.endpoint, {
+      method: 'POST',
+      body: JSON.stringify({ user: { name: fullName(), device: db.user.device }, ops }),
+    });
+    const out = await res.json();
+    if (out.ok) {
+      const done = new Set(out.done);
+      db = Object.assign(load(), { queue: (load().queue || []).filter(o => !done.has(o.opId)) });
+      try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { /* */ }
+      if (db.queue.length) setTimeout(flush, 500);
+    }
+  } catch (e) { /* offline o server non raggiungibile: si riprova dopo */ }
+  flushing = false;
+}
+// Link di collegamento che il responsabile manda ai dipendenti: ...?collega=<URL web app>
+function handleConnect() {
+  const params = new URLSearchParams(location.search);
+  const url = params.get('collega');
+  if (!url) return false;
+  history.replaceState(null, '', location.pathname);
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(url)) {
+    alert('Link di collegamento non valido.');
+    return false;
+  }
+  openDialog(`
+    <h3>Collegare al registro aziendale?</h3>
+    <p>Le tue timbrature verranno inviate automaticamente al foglio del responsabile.</p>
+    <div class="row"><button class="btn ghost" value="">No</button><button class="btn" value="ok">Collega</button></div>`,
+    () => {
+      db.endpoint = url;
+      if (db.user) resyncAll();
+      save();
+      toast('Collegato al registro aziendale ✓');
+    });
+  return true;
+}
+
 // ---------- Avvio ----------
 render();
-if (db.user) handleNfc(); else editProfile(handleNfc);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); render(); } });
+const afterProfile = () => { if (!handleConnect()) handleNfc(); };
+if (db.user) afterProfile(); else editProfile(afterProfile);
+window.addEventListener('online', flush);
+setInterval(flush, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); db.queue = db.queue || []; render(); flush(); } });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
