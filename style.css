@@ -194,3 +194,4 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .palette button:focus-visible, .swatch:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
 /* I pulsanti in fondo alle finestre (Salva, Indietro…) restano sempre visibili */
 dialog form > .row:last-child { position: sticky; bottom: -20px; background: var(--card); padding-block: 10px 20px; margin-bottom: -20px; z-index: 1; }
+.palette[hidden] { display: none; }
