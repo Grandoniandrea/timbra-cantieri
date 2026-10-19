@@ -25,11 +25,14 @@ const TURNI = [
 const AUTORIZZA_NOME = 'INSERISCI_NOME';
 const AUTORIZZA_TELEFONO = 'INSERISCI_TELEFONO';
 
+// Sede: si timbra solo entro RAGGIO metri. Il responsabile può ricentrarla dall'app (Area responsabile → Sede).
+const SEDE_PREDEFINITA = { nome: 'Sede GE3CO – Via G. Ferraris 7, Pisa', lat: 43.67856, lng: 10.43600, raggio: 300 };
+
 const FOGLIO_TIMBRATURE = 'Timbrature';
 const INTESTAZIONE = ['ID', 'Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Ore', 'Stato', 'Telefono', 'Aggiornato',
-  'Extra (ore)', 'Motivo extra', 'Nota extra', 'Stato extra', 'Posizione entrata', 'Posizione uscita', 'Turno'];
+  'Extra (ore)', 'Motivo extra', 'Nota extra', 'Stato extra', 'Posizione entrata', 'Posizione uscita', 'Turno', 'Controllo sede'];
 // Indici (base 1) delle colonne extra e posizione
-const COL_EXTRA = 11, COL_MOTIVO = 12, COL_NOTA = 13, COL_STATO_EXTRA = 14, COL_POS_IN = 15, COL_POS_OUT = 16, COL_TURNO = 17;
+const COL_EXTRA = 11, COL_MOTIVO = 12, COL_NOTA = 13, COL_STATO_EXTRA = 14, COL_POS_IN = 15, COL_POS_OUT = 16, COL_TURNO = 17, COL_SEDE = 18;
 
 // Assenze (ferie, permessi, malattia)
 const FOGLIO_ASSENZE = 'Assenze';
@@ -81,7 +84,7 @@ function doGet(e) {
   }
   if (e && e.parameter && e.parameter.azione === 'cantieri') {
     return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), config: {
-      oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN, turni: TURNI,
+      oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN, turni: TURNI, sede: sede_(),
       autorizzaNome: AUTORIZZA_NOME.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_NOME,
       autorizzaTelefono: AUTORIZZA_TELEFONO.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_TELEFONO,
       resetAt: Number(PropertiesService.getScriptProperties().getProperty('RESET_AT') || 0),
@@ -157,6 +160,7 @@ function admin_(req) {
     case 'elimina': remove_(req.id); return { ok: true };
     case 'extra': return { ok: true, extra: extraInAttesa_() };
     case 'azzera': azzera_(); return { ok: true };
+    case 'sede': impostaSede_(req.sede); return { ok: true, sede: sede_() };
     case 'assenze': return { ok: true, assenze: assenze_() };
     case 'decidiassenza': decidiAssenza_(req.id, !!req.approva); return { ok: true, assenze: assenze_() };
     case 'decidi': decidiExtra_(req.id, !!req.approva); return { ok: true, extra: extraInAttesa_() };
@@ -187,7 +191,7 @@ function timbratureMese_(anno, mese) {
       start: r[4].getTime(), end: r[5] instanceof Date ? r[5].getTime() : null,
       extra: Number(r[COL_EXTRA - 1]) || 0, statoExtra: String(r[COL_STATO_EXTRA - 1] || ''),
       posIn: String(r[COL_POS_IN - 1] || ''), posOut: String(r[COL_POS_OUT - 1] || ''),
-      turno: String(r[COL_TURNO - 1] || turno_(r[4])) }))
+      turno: String(r[COL_TURNO - 1] || turno_(r[4])), sede: String(r[COL_SEDE - 1] || '') }))
     .sort((x, y) => y.start - x.start);
 }
 
@@ -307,7 +311,8 @@ function upsert_(s, user) {
   const posIn = mappa_(s.posIn) || (prima && prima[COL_POS_IN - 1]) || '';
   const posOut = s.end ? (mappa_(s.posOut) || (prima && prima[COL_POS_OUT - 1]) || '') : '';
   const row = [s.id, nome, giorno, s.site || '', start, end, ore, s.end ? 'Chiuso' : 'In corso', user && user.device || '', new Date(),
-    extraMin ? round2_(extraMin / 60) : '', extraMin ? motivo : '', extraMin ? nota : '', statoExtra, posIn, posOut, turno_(start)];
+    extraMin ? round2_(extraMin / 60) : '', extraMin ? motivo : '', extraMin ? nota : '', statoExtra, posIn, posOut, turno_(start),
+    controlloSede_(s, prima)];
   if (r) sh.getRange(r, 1, 1, row.length).setValues([row]);
   else { sh.appendRow(row); r = sh.getLastRow(); }
   sh.getRange(r, 3).setNumberFormat('dd/mm/yyyy');
@@ -355,6 +360,37 @@ function turno_(d) {
   return 'Fuori orario';
 }
 
+function sede_() {
+  const v = PropertiesService.getScriptProperties().getProperty('SEDE');
+  try { if (v) return Object.assign({}, SEDE_PREDEFINITA, JSON.parse(v)); } catch (e) { /* valore non valido */ }
+  return SEDE_PREDEFINITA;
+}
+
+function impostaSede_(x) {
+  const lat = Number(x && x.lat), lng = Number(x && x.lng), raggio = Math.round(Number(x && x.raggio) || 0);
+  if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error('Posizione non valida');
+  if (raggio < 50 || raggio > 2000) throw new Error('Raggio non valido');
+  PropertiesService.getScriptProperties().setProperty('SEDE', JSON.stringify({ lat, lng, raggio }));
+}
+
+// Distanza in metri tra due punti (formula dell'emisenoverso)
+function distanza_(a, b) {
+  const R = 6371000, rad = x => x * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// Esito del controllo sede per una posizione: '' se ok, altrimenti il problema
+function fuoriSede_(p, quando) {
+  if (!p) return '';
+  if (p.errore) return quando + ' senza posizione';
+  const sede = sede_();
+  const d = distanza_(sede, p);
+  const margine = Math.min(Number(p.acc) || 0, 100);
+  return d > sede.raggio + margine ? quando + ' a ' + (d >= 1000 ? (d / 1000).toFixed(1).replace('.', ',') + ' km' : Math.round(d) + ' m') + ' dalla sede' : '';
+}
+
 // Posizione GPS -> link a Google Maps (o il motivo per cui manca)
 function mappa_(p) {
   if (!p) return '';
@@ -362,6 +398,12 @@ function mappa_(p) {
   const lat = Number(p.lat), lng = Number(p.lng);
   if (!isFinite(lat) || !isFinite(lng)) return '';
   return 'https://maps.google.com/?q=' + lat.toFixed(6) + ',' + lng.toFixed(6) + (p.acc ? ' (±' + Math.round(p.acc) + ' m)' : '');
+}
+
+function controlloSede_(s, prima) {
+  if (!s.posIn && !s.posOut) return (prima && prima[COL_SEDE - 1]) || '';
+  const problemi = [fuoriSede_(s.posIn, 'Entrata'), s.end ? fuoriSede_(s.posOut, 'Uscita') : ''].filter(Boolean);
+  return problemi.length ? 'FUORI SEDE: ' + problemi.join('; ') : 'OK';
 }
 
 function extraInAttesa_() {
@@ -606,13 +648,16 @@ function avvisoSerale() {
   const aperti = dati.filter(r => r[7] === 'In corso' && r[4] instanceof Date);
   const extra = extraInAttesa_();
   const ass = assenze_().filter(a => a.stato === ASS_ATTESA);
-  if (!aperti.length && !extra.length && !ass.length) return;
+  const fuori = dati.filter(r => String(r[COL_SEDE - 1] || '').indexOf('FUORI SEDE') === 0 && r[4] instanceof Date && r[4] >= oggi);
+  if (!aperti.length && !extra.length && !ass.length && !fuori.length) return;
   const tz = Session.getScriptTimeZone();
   const f = d => Utilities.formatDate(d, tz, 'dd/MM HH:mm');
   const li = arr => '<ul>' + arr.map(x => '<li>' + x + '</li>').join('') + '</ul>';
   let html = '<p>Situazione di oggi su Timbra Cantieri:</p>';
   if (aperti.length) html += '<h3>Uscite non timbrate (' + aperti.length + ')</h3>' +
     li(aperti.map(r => '<b>' + r[1] + '</b> · ' + r[3] + ' · entrata ' + f(r[4])));
+  if (fuori.length) html += '<h3>Timbrature fuori sede oggi (' + fuori.length + ')</h3>' +
+    li(fuori.map(r => '<b>' + r[1] + '</b> · ' + r[3] + ' · ' + f(r[4]) + ' · ' + r[COL_SEDE - 1]));
   if (extra.length) html += '<h3>Ore extra da autorizzare (' + extra.length + ')</h3>' +
     li(extra.map(x => '<b>' + x.dip + '</b> · ' + x.cantiere + ' · +' + String(x.extra).replace('.', ',') + ' h · ' + (x.motivo || '') + (x.nota ? ' – ' + x.nota : '')));
   if (ass.length) html += '<h3>Ferie e permessi da approvare (' + ass.length + ')</h3>' +
@@ -620,7 +665,7 @@ function avvisoSerale() {
   html += '<p>Si sistemano dall\'app: tieni premuto il logo GE3CO → Area responsabile.</p>';
   MailApp.sendEmail({
     to: EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail(),
-    subject: 'GE3CO – Da sistemare oggi (' + (aperti.length + extra.length + ass.length) + ')',
+    subject: 'GE3CO – Da sistemare oggi (' + (aperti.length + extra.length + ass.length + fuori.length) + ')',
     htmlBody: html,
   });
 }

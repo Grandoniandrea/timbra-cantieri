@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 23;
+const APP_VERSION = 24;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -68,6 +68,39 @@ const toLocalInput = t => { const d = new Date(t); return `${d.getFullYear()}-${
 const posLabel = p => !p ? '📍 Rilevo la posizione…'
   : p.errore ? `📍 Posizione non disponibile (${esc(p.errore)}). Controlla che la localizzazione sia attiva.`
   : `📍 Posizione registrata ✓ (±${Math.round(p.acc || 0)} m)`;
+// ---------- Controllo sede: si timbra solo vicino alla sede ----------
+function distanza(a, b) {
+  const R = 6371000, rad = x => x * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+const fmtDist = d => d >= 1000 ? (d / 1000).toFixed(1).replace('.', ',') + ' km' : Math.round(d) + ' m';
+// Rileva la posizione, controlla la distanza dalla sede e poi esegue cb(pos). Altrimenti blocca la timbratura.
+async function requireSede(what, cb) {
+  const sede = cfg().sede;
+  openDialog(`<h3>📍 Verifico la posizione</h3><p>Controllo che tu sia in sede per timbrare ${esc(what)}…</p>`);
+  $('#dlgBody .dlg-x').remove();
+  const pos = await getPos();
+  const retry = (title, msg) => openDialog(`
+    <h3>${title}</h3><p>${msg}</p>
+    <div class="row"><button class="btn ghost" value="">Chiudi</button><button class="btn" value="retry">Riprova</button></div>`,
+    a => { if (a === 'retry') setTimeout(() => requireSede(what, cb), 50); });
+  if (pos.errore) {
+    return retry('📍 Posizione non disponibile',
+      `Per timbrare serve la posizione del telefono (${esc(pos.errore)}). Attiva la Localizzazione e consenti l'accesso alla posizione per questo sito, poi riprova.`);
+  }
+  if (sede && isFinite(sede.lat)) {
+    const d = distanza(sede, pos);
+    if (d > sede.raggio + Math.min(pos.acc || 0, 100)) {
+      return retry('🚫 Non sei in sede',
+        `Sei a <b>${fmtDist(d)}</b> dalla sede (${esc(sede.nome || 'sede')}). L'${esc(what)} si timbra solo in sede.`);
+    }
+  }
+  if (dlg.open) dlg.close();
+  cb(pos);
+}
+
 function getPos() {
   return new Promise(resolve => {
     if (!navigator.geolocation) return resolve({ errore: 'non supportata' });
@@ -77,34 +110,18 @@ function getPos() {
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 120000 });
   });
 }
-function clockIn(siteId) {
+// La posizione (pos) arriva già verificata da requireSede()
+function clockIn(siteId, pos) {
   if (db.active) return;
-  db.active = { id: uid(), siteId, start: Date.now() };
-  enqueueUpsert({ id: db.active.id, siteId, start: db.active.start, end: null });
+  db.active = { id: uid(), siteId, start: Date.now(), posIn: pos || null };
+  enqueueUpsert(Object.assign({}, db.active, { end: null }));
   save();
-  const id = db.active.id;
-  getPos().then(pos => {
-    if (db.active && db.active.id === id) {
-      db.active.posIn = pos;
-      enqueueUpsert(Object.assign({}, db.active, { end: null }));
-      toast(pos.errore ? 'Posizione non disponibile' : 'Posizione registrata ✓');
-    } else {
-      const s = db.shifts.find(x => x.id === id);
-      if (!s) return;
-      s.posIn = pos; enqueueUpsert(s);
-    }
-    save();
-  });
   return db.active;
 }
-function clockOut() {
+function clockOut(pos) {
   if (!db.active) return null;
-  const shift = { id: db.active.id || uid(), siteId: db.active.siteId, start: db.active.start, end: Date.now(), posIn: db.active.posIn };
-  getPos().then(pos => {
-    const s = db.shifts.find(x => x.id === shift.id);
-    if (!s) return;
-    s.posOut = pos; enqueueUpsert(s); save();
-  });
+  const shift = { id: db.active.id || uid(), siteId: db.active.siteId, start: db.active.start, end: Date.now(),
+    posIn: db.active.posIn, posOut: pos || null };
   const prevActive = db.active;
   db.shifts.unshift(shift);
   db.active = null;
@@ -113,7 +130,7 @@ function clockOut() {
   shift.undo = () => {
     db.shifts = db.shifts.filter(s => s.id !== shift.id);
     db.active = prevActive;
-    enqueueUpsert({ id: shift.id, siteId: shift.siteId, start: shift.start, end: null });
+    enqueueUpsert({ id: shift.id, siteId: shift.siteId, start: shift.start, end: null, posIn: shift.posIn });
     save();
   };
   toast(`Uscita ${siteById(shift.siteId).name} · ${fmtDur(shift.end - shift.start)}`, shift.undo);
@@ -136,7 +153,7 @@ function render() {
       <div class="timer" id="timer"></div>
       <div class="bar"><span id="bar"></span></div>
       <p id="left"></p>
-      <p class="gps">${posLabel(db.active.posIn)}</p>
+      <p class="gps">${posLabel(db.active.posIn)}${db.active.posIn && !db.active.posIn.errore && cfg().sede ? ' · in sede' : ''}</p>
       <p>${esc(fasciaLabel(db.active.start))} · entrata alle ${fmtTime(db.active.start)} · fine prevista alle ${fmtTime(db.active.start + cfg().oreTurno * 3600000)}</p>
       <button class="btn big danger" id="btnOut">Timbra uscita</button>`;
     const tick = () => {
@@ -150,7 +167,7 @@ function render() {
       document.title = `⏱ ${fmtClock(done)} · Timbra Cantieri`;
     };
     tick(); timer = setInterval(tick, 1000);
-    $('#btnOut').onclick = () => { const sh = clockOut(); if (sh) afterClockOut(sh, false); };
+    $('#btnOut').onclick = () => requireSede('uscita', pos => { const sh = clockOut(pos); if (sh) afterClockOut(sh, false); });
   } else {
     st.className = 'card status';
     st.innerHTML = `
@@ -201,7 +218,10 @@ function render() {
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-in],[data-edit-site],[data-edit-shift]');
   if (!t) return;
-  if (t.dataset.in) { clockIn(t.dataset.in); toast(`Entrata ${siteById(t.dataset.in).name} alle ${fmtTime(Date.now())}`); }
+  if (t.dataset.in) {
+    const siteId = t.dataset.in;
+    requireSede('entrata', pos => { clockIn(siteId, pos); toast(`Entrata ${siteById(siteId).name} alle ${fmtTime(Date.now())}`); });
+  }
   else if (t.dataset.editSite) editSite(t.dataset.editSite);
   else if (t.dataset.editShift) editShift(t.dataset.editShift);
 });
@@ -289,13 +309,13 @@ function editShift(id) {
   });
 }
 
-function pickSiteForNfc() {
+function pickSiteForNfc(pos) {
   openDialog(`
     <h3>Dove sei oggi?</h3>
     <p>Scegli il cantiere per timbrare l'entrata.</p>
     <div class="pick">${db.sites.filter(s => !s.hidden).map(s => `<button value="${s.id}"><span class="dot" style="background:${esc(s.color)}"></span>${esc(s.name)}</button>`).join('')}</div>
     <button class="btn ghost" value="">Annulla</button>`, siteId => {
-    clockIn(siteId);
+    clockIn(siteId, pos);
     const undo = () => { if (db.active) enqueueDelete(db.active.id); db.active = null; save(); };
     setTimeout(() => showBigOk('Entrata', siteById(siteId).name, `alle ${fmtTime(db.active.start)}`, undo), 50);
   });
@@ -320,11 +340,11 @@ function handleNfc() {
   const params = new URLSearchParams(location.search);
   if (!params.has('nfc')) return;
   history.replaceState(null, '', location.pathname); // un ricarico della pagina non ri-timbra
-  if (!db.active) { pickSiteForNfc(); return; }
-  const doOut = () => {
-    const shift = clockOut();
-    if (shift) afterClockOut(shift, true);
-  };
+  if (!db.active) { requireSede('entrata', pos => setTimeout(() => pickSiteForNfc(pos), 50)); return; }
+  const doOut = () => requireSede('uscita', pos => {
+    const shift = clockOut(pos);
+    if (shift) setTimeout(() => afterClockOut(shift, true), 50);
+  });
   if (Date.now() - db.active.start < DOUBLE_TAP_MS) {
     openDialog(`
       <h3>Hai appena timbrato l'entrata</h3>
@@ -795,6 +815,7 @@ function adminHome() {
       <button class="btn ghost" value="extra">⏱️ Ore extra da autorizzare${adminExtraCount ? ` <span class="badge">${adminExtraCount}</span>` : ''}</button>
       <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia${adminAbsCount ? ` <span class="badge">${adminAbsCount}</span>` : ''}</button>
       <button class="btn ghost" value="shifts">✏️ Modifica timbrature dei dipendenti</button>
+      <button class="btn ghost" value="sede">📍 Sede per le timbrature</button>
       <button class="btn ghost" value="pwd">🔑 Cambia password</button>
       <button class="btn ghost danger-text" value="reset">🧹 Azzera tutto e parti da zero</button>
       <button class="btn ghost" value="logout">Esci dall'area responsabile</button>
@@ -808,6 +829,7 @@ function adminHome() {
       extra: () => call('extra', null, 'Carico le richieste', out => adminExtra(out.extra)),
       assenze: () => call('assenze', null, 'Carico ferie e permessi', out => adminAbsences(out.assenze)),
       pwd: adminChangePassword,
+      sede: () => adminSede(),
       reset: adminReset,
       logout: () => { adminPwd = null; toast('Uscito dall\'area responsabile'); },
       forget: () => { adminPwd = null; db.adminDevice = false; save(); toast('Per rientrare: 5 tocchi veloci sul logo'); },
@@ -1057,6 +1079,40 @@ function adminShiftEdit(id, filter) {
     }), 50);
   });
 }
+
+// --- Sede
+function adminSede(msg) {
+  const sede = cfg().sede || {};
+  const map = isFinite(sede.lat) ? `https://maps.google.com/?q=${sede.lat},${sede.lng}` : '';
+  openDialog(`
+    <h3>📍 Sede per le timbrature</h3>
+    <p>Entrata e uscita si timbrano solo entro <b>${sede.raggio || '?'} m</b> da questo punto.</p>
+    ${msg ? `<p class="err">${esc(msg)}</p>` : ''}
+    ${map ? `<a class="btn ghost" href="${esc(map)}" target="_blank" rel="noopener">Vedi la sede sulla mappa</a>` : ''}
+    <label>Raggio<select name="raggio">${[100, 150, 200, 300, 500].map(r => `<option value="${r}" ${r === sede.raggio ? 'selected' : ''}>${r} metri</option>`).join('')}</select></label>
+    <p class="note">Per centrare la sede con precisione, premi il pulsante qui sotto mentre sei in ufficio.</p>
+    <button class="btn" value="here">📍 Usa la mia posizione attuale come sede</button>
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn ghost" value="raggio">Salva solo il raggio</button></div>`,
+    (a, fd) => {
+      if (a === 'back') return setTimeout(adminHome, 50);
+      const raggio = Number(fd.get('raggio'));
+      const save = (lat, lng) => call('sede', { sede: { lat, lng, raggio } }, 'Salvo la sede', out => {
+        db.config = Object.assign({}, db.config, { sede: out.sede }); save_();
+        toast('Sede salvata ✓'); adminSede();
+      });
+      if (a === 'raggio') return setTimeout(() => save(sede.lat, sede.lng), 50);
+      if (a === 'here') {
+        setTimeout(async () => {
+          busy('Rilevo la tua posizione');
+          const pos = await getPos();
+          if (pos.errore) return adminSede('Posizione non disponibile: ' + pos.errore);
+          if (pos.acc > 100) return adminSede(`Segnale GPS poco preciso (±${Math.round(pos.acc)} m). Avvicinati a una finestra o esci e riprova.`);
+          save(pos.lat, pos.lng);
+        }, 50);
+      }
+    });
+}
+const save_ = () => save();
 
 // --- Azzeramento
 function adminReset(msg) {
