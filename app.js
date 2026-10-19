@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 25;
+const APP_VERSION = 32;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -441,6 +441,7 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
   <div class="menu">
     <button class="btn" value="share">📤 Invia le mie timbrature al responsabile (WhatsApp)</button>
     <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia</button>
+    <button class="btn ghost" value="paga">💶 Stima busta paga</button>
     <button class="btn ghost" value="csv">⬇︎ Scarica le mie timbrature (Excel)</button>
     <button class="btn ghost" value="">Chiudi</button>
   </div>` : `
@@ -450,6 +451,7 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
     ${db.endpoint ? '<button class="btn" value="admin">🔒 Area responsabile</button>' : ''}
     <button class="btn ghost" value="share">📤 Invia timbrature del mese</button>
     <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia</button>
+    <button class="btn ghost" value="paga">💶 Stima busta paga</button>
     <button class="btn ghost" value="csv">⬇︎ Esporta tutte le timbrature (Excel)</button>
     <button class="btn ghost" value="profile">👤 Cambia nome e cognome</button>
     <button class="btn ghost" value="backup">💾 Salva backup completo</button>
@@ -459,6 +461,7 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
   </div>`, action => {
   if (action === 'share') shareMonth();
   if (action === 'assenze') setTimeout(myAbsences, 50);
+  if (action === 'paga') setTimeout(payPick, 50);
   if (action === 'csv') exportCsv();
   if (action === 'profile') setTimeout(() => editProfile(), 50);
   if (action === 'backup') download(`timbra-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(db, null, 2), 'application/json');
@@ -505,6 +508,155 @@ function toast(msg, undo) {
   if (undo) t.querySelector('button').onclick = () => { undo(); t.hidden = true; if (dlg.open) dlg.close(); };
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, undo ? UNDO_MS : 3000);
+}
+
+// ---------- Stima busta paga (solo su questo telefono) ----------
+// Calcola da solo una busta del mese scelto: stipendio mensile fisso + ore extra dalle timbrature,
+// contributi, IRPEF con detrazioni da lavoro dipendente e cuneo fiscale, addizionali stimate.
+// Senza dati dell'azienda: è una stima. Paga oraria e ore le inserisce l'operatore e restano sul telefono.
+const PAGA_DEFAULT = { oraria: 0, ore: 0, magg: 30, inps: 9.76, addiz: true, sind: 0, piu: 0 };
+const euro = v => (Math.round(v * 100) / 100).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const numIt = v => (v === undefined || v === null || v === '') ? '' : String(v).replace('.', ',');
+const parseIt = v => Number(String(v || '').trim().replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.')) || 0;
+const paga = () => Object.assign({}, PAGA_DEFAULT, db.paga && db.paga.v === 2 ? db.paga : {});
+function paySettings(then) {
+  const p = paga();
+  const f = (name, label, v, note) => `<label>${label}<input name="${name}" inputmode="decimal" value="${esc(numIt(v))}">${note ? `<small class="note">${note}</small>` : ''}</label>`;
+  openDialog(`
+    <h3>⚙️ Dati per la stima</h3>
+    <p class="note">Li trovi su una tua busta paga. Restano solo su questo telefono: non vanno al responsabile né al foglio.</p>
+    ${f('oraria', 'Paga oraria lorda (€)', p.oraria || '', 'Sulla busta: la base della voce "lavoro ordinario"')}
+    ${f('ore', 'Ore al mese da contratto', p.ore || '', 'Ore settimanali × 4,33')}
+    ${f('magg', 'Maggiorazione ore extra (%)', p.magg)}
+    ${f('inps', 'Contributi INPS (%)', p.inps)}
+    <label class="adm-on"><input type="checkbox" name="addiz" ${p.addiz ? 'checked' : ''}> Trattieni le addizionali regionale e comunale</label>
+    ${f('sind', 'Trattenuta sindacale al mese (€)', p.sind || '', 'Lascia vuoto se non sei iscritto')}
+    ${f('piu', 'Altre voci nette in più al mese (€)', p.piu || '', 'Per esempio incrementi contrattuali; altrimenti vuoto')}
+    <div class="row"><button class="btn ghost" value="" formnovalidate>Annulla</button><button class="btn" value="save">Salva</button></div>`,
+    (a, fd) => {
+      const v = k => parseIt(fd.get(k));
+      const n = { v: 2, oraria: v('oraria'), ore: v('ore'), magg: v('magg'), inps: v('inps'), addiz: fd.get('addiz') === 'on', sind: v('sind'), piu: v('piu') };
+      if (!(n.oraria > 0 && n.ore > 0)) { alert('Servono almeno la paga oraria e le ore al mese.'); return false; }
+      db.paga = n;
+      save();
+      setTimeout(then || payPick, 50);
+    });
+}
+let payMonth = null, payMode = 'fine';
+function payPick() {
+  const p = paga();
+  if (!(p.oraria > 0 && p.ore > 0)) return paySettings(payPick);
+  openDialog(`
+    <h3>💶 Stima busta paga</h3>
+    <p>${esc(fullName() || 'Operatore')}</p>
+    <label>Mese<input type="month" name="mese" required value="${payMonth || monthNow()}"></label>
+    <div class="motivi">
+      <label><input type="radio" name="modo" value="fine" ${payMode === 'fine' ? 'checked' : ''}> A fine mese</label>
+      <label><input type="radio" name="modo" value="oggi" ${payMode === 'oggi' ? 'checked' : ''}> Maturato a oggi</label>
+    </div>
+    <button class="btn" value="gen">Genera</button>
+    <button class="btn ghost" value="set" formnovalidate>⚙️ Dati per la stima</button>`,
+    (a, fd) => {
+      if (a === 'set') return setTimeout(() => paySettings(payPick), 50);
+      payMonth = String(fd.get('mese'));
+      payMode = String(fd.get('modo') || 'fine');
+      setTimeout(() => payShow(payMonth), 50);
+    });
+}
+// IRPEF annua 2026: 23% fino a 28.000, 33% fino a 50.000, 43% oltre
+const irpefAnnua = r => r <= 28000 ? r * 0.23 : r <= 50000 ? 6440 + (r - 28000) * 0.33 : 13700 + (r - 50000) * 0.43;
+// Detrazione per lavoro dipendente (art. 13 TUIR), annua
+const detrLavoro = r => r <= 15000 ? 1955 : r <= 28000 ? 1910 + 1190 * (28000 - r) / 13000 : r <= 50000 ? 1910 * (50000 - r) / 22000 : 0;
+// Cuneo fiscale (L. 207/2024): sotto 20.000 € somma esente in busta, da 20.000 a 40.000 € ulteriore detrazione
+const cuneoSomma = (r, lav) => r <= 8500 ? lav * 0.071 : r <= 15000 ? lav * 0.053 : r <= 20000 ? lav * 0.048 : 0;
+const cuneoDetr = r => r > 20000 && r <= 32000 ? 1000 : r > 32000 && r <= 40000 ? 1000 * (40000 - r) / 8000 : 0;
+const ADDIZ_PERC = 2.3; // regionale Toscana + comunale, stima media
+// Netto che resta di un'ora extra lorda (contributi + IRPEF al 23%)
+const NETTO_EXTRA = (1 - 0.0976) * (1 - 0.23);
+function payCalc(m) {
+  const p = paga();
+  const [y, mo] = m.split('-').map(Number);
+  const da = new Date(y, mo - 1, 1).getTime(), a = new Date(y, mo, 1).getTime();
+  const mine = db.shifts.filter(s => s.start >= da && s.start < a && s.end);
+  const r2 = v => Math.round(v * 100) / 100;
+  // Quota del mese: intera a fine mese, oppure i giorni passati fino a oggi
+  const giorniMese = new Date(y, mo, 0).getDate();
+  const oggi = new Date();
+  const passati = Date.now() >= a ? giorniMese : Date.now() < da ? 0 : oggi.getDate();
+  const frac = payMode === 'oggi' ? passati / giorniMese : 1;
+  // Ore extra: dalle timbrature, oltre il turno da 5 ore. In busta solo se autorizzate: qui restano a parte.
+  const extraH = r2(mine.reduce((t, s) => t + extraMin(s), 0) / 60);
+  const pagaExtra = p.oraria * (1 + (p.magg || 0) / 100);
+  const extraLordo = r2(extraH * pagaExtra);
+  const extraNetto = r2(extraLordo * NETTO_EXTRA);
+  const ordinario = r2(p.oraria * p.ore * frac);
+  const lordo = ordinario;
+  const inps = r2(lordo * (p.inps || 0) / 100);
+  const imponibile = r2(lordo - inps);
+  const annuo = p.oraria * p.ore * (1 - (p.inps || 0) / 100) * 13;
+  const irpefLorda = r2(irpefAnnua(imponibile / (frac || 1) * 12) / 12 * frac);
+  const detr = r2((detrLavoro(annuo) + cuneoDetr(annuo)) / 12 * frac);
+  const irpef = r2(Math.max(0, irpefLorda - detr));
+  const cuneo = r2(cuneoSomma(annuo, p.oraria * p.ore * 13) / 12 * frac);
+  const addiz = p.addiz ? r2(annuo * ADDIZ_PERC / 100 / 12 * frac) : 0;
+  const sind = r2((p.sind || 0) * frac), piu = r2((p.piu || 0) * frac);
+  const tratt = r2(inps + irpef + addiz + sind);
+  const netto = r2(lordo + cuneo + piu - tratt);
+  return { p, y, mo, frac, passati, giorniMese, turni: mine.length, giorni: new Set(mine.map(s => new Date(s.start).toDateString())).size,
+    extraH, ordinario, pagaExtra, extraLordo, extraNetto, lordo, inps, imponibile, irpefLorda, detr, irpef, cuneo, addiz, sind, piu, tratt, netto };
+}
+function payDoc(c) {
+  const p = c.p;
+  const mese = new Date(c.y, c.mo - 1, 1).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }).toUpperCase();
+  const row = (d, det, comp, tr) => `<tr><td>${d}${det ? `<small>${det}</small>` : ''}</td><td>${comp}</td><td>${tr}</td></tr>`;
+  return `<div class="busta">
+    <div class="busta-head">
+      <div><span>Operatore</span><b>${esc((fullName() || 'Operatore').toUpperCase())}</b></div>
+      <div><span>Mese</span><b>${esc(mese)}</b></div>
+    </div>
+    <div class="busta-info">
+      <div><span>Turni</span>${c.turni}</div>
+      <div><span>Giorni</span>${c.giorni}</div>
+      <div><span>Ore extra</span>${numIt(c.extraH)}</div>
+    </div>
+    <table class="busta-voci">
+      <thead><tr><th>Voce</th><th>Competenze</th><th>Trattenute</th></tr></thead>
+      <tbody>
+        ${row('Lavoro ordinario', `${numIt(p.ore)} h × ${numIt(p.oraria)}${c.frac < 1 ? ` · ${c.passati} giorni su ${c.giorniMese}` : ''}`, euro(c.ordinario), '')}
+        ${c.cuneo ? row('Somma esente cuneo fiscale', 'L. 207/2024', euro(c.cuneo), '') : ''}
+        ${row('Contributi INPS', `${numIt(p.inps)}% su ${euro(c.lordo)}`, '', euro(c.inps))}
+        ${row('IRPEF', `${euro(c.irpefLorda)} su ${euro(c.imponibile)} − detrazioni ${euro(c.detr)}`, '', euro(c.irpef))}
+        ${c.addiz ? row('Addizionali regionale e comunale', 'stima', '', euro(c.addiz)) : ''}
+        ${c.sind ? row('Trattenuta sindacale', '', '', euro(c.sind)) : ''}
+        ${c.piu ? row('Altre voci nette', '', euro(c.piu), '') : ''}
+      </tbody>
+    </table>
+    <div class="busta-tot">
+      <div><span>Totale lordo</span>${euro(c.lordo + c.cuneo)}</div>
+      <div><span>Totale trattenute</span>${euro(c.tratt)}</div>
+      <div class="netto"><span>Netto stimato${c.frac < 1 ? ' maturato a oggi' : ' a fine mese'}</span>${euro(c.netto)} €</div>
+    </div>
+    ${c.extraH ? `<div class="busta-extra"><b>Ore extra da autorizzare: ${numIt(c.extraH)} h</b>
+      Non sono nel netto: entrano in busta solo se il responsabile le autorizza. Se autorizzate tutte: circa +${euro(c.extraNetto)} € netti (${euro(c.extraLordo)} € lordi${p.magg ? `, +${numIt(p.magg)}%` : ''}).</div>` : ''}
+    <p class="busta-note">Stima calcolata dall'app sulle timbrature di questo telefono. Non è un cedolino. Ogni turno vale ${cfg().oreTurno} ore; lo stipendio è mensile fisso. Malattia, assenze, festività e conguagli possono cambiare la cifra.${c.addiz ? ` Se quest'anno le addizionali non te le trattengono, il netto sale di ${euro(c.addiz)} €.` : ''}</p>
+  </div>`;
+}
+function payShow(m) {
+  const c = payCalc(m);
+  openDialog(`
+    <h3>💶 Stima busta paga</h3>
+    <div class="busta-wrap">${payDoc(c)}</div>
+    <div class="menu">
+      <button class="btn" value="print">📄 Salva PDF / stampa</button>
+      <button class="btn ghost" value="back">Cambia mese</button>
+    </div>`, a => {
+    if (a === 'back') setTimeout(payPick, 50);
+    if (a === 'print') setTimeout(() => {
+      $('#printArea').innerHTML = `<h1>Stima busta paga</h1>${payDoc(c)}`;
+      window.print();
+      setTimeout(() => payShow(m), 300);
+    }, 50);
+  });
 }
 
 // ---------- Profilo dipendente ----------
