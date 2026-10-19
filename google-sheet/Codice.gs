@@ -26,7 +26,7 @@ const AUTORIZZA_NOME = 'INSERISCI_NOME';
 const AUTORIZZA_TELEFONO = 'INSERISCI_TELEFONO';
 
 // Sede: si timbra solo entro RAGGIO metri. Il responsabile può ricentrarla dall'app (Area responsabile → Sede).
-const SEDE_PREDEFINITA = { nome: 'Sede GE3CO – Via G. Ferraris 7, Pisa', lat: 43.67856, lng: 10.43600, raggio: 300 };
+const SEDE_PREDEFINITA = { nome: 'Sede GE3CO – Via G. Ferraris 7, Pisa', lat: 43.6790219, lng: 10.4356678, raggio: 200 };
 
 const FOGLIO_TIMBRATURE = 'Timbrature';
 const INTESTAZIONE = ['ID', 'Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Ore', 'Stato', 'Telefono', 'Aggiornato',
