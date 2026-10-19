@@ -342,7 +342,7 @@ $('#btnMenu').onclick = () => openDialog(`
     <button class="btn ghost" value="backup">💾 Salva backup completo</button>
     <button class="btn ghost" value="restore">♻︎ Ripristina da backup</button>
     <button class="btn ghost" value="nfc">🏷️ Link da scrivere sul tag NFC</button>
-    ${db.endpoint ? '<button class="btn ghost" value="admin">🔒 Area responsabile</button>' : ''}
+    <button class="btn ghost" value="admin">🔒 Area responsabile</button>
     <button class="btn ghost" value="">Chiudi</button>
   </div>`, action => {
   if (action === 'share') shareMonth();
@@ -351,7 +351,10 @@ $('#btnMenu').onclick = () => openDialog(`
   if (action === 'backup') download(`timbra-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(db, null, 2), 'application/json');
   if (action === 'restore') importBackup();
   if (action === 'nfc') setTimeout(showNfcLink, 50);
-  if (action === 'admin') setTimeout(adminLogin, 50);
+  if (action === 'admin') setTimeout(() => db.endpoint ? adminLogin() : openDialog(`
+    <h3>🔒 Area responsabile</h3>
+    <p>Questo telefono non è ancora collegato al registro aziendale. Apri prima il link di collegamento (quello con <b>?collega=</b>), poi torna qui.</p>
+    <button class="btn" value="">OK</button>`), 50);
 });
 function showNfcLink() {
   const link = location.origin + location.pathname + '?nfc=1';
