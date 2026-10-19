@@ -142,7 +142,7 @@ function render() {
   const recent = db.shifts.slice(0, 30);
   $('#log').innerHTML = recent.length ? recent.map(s => {
     const site = siteById(s.siteId);
-    return `<li data-edit-shift="${s.id}" style="cursor:pointer">
+    return `<li ${isEmployee() ? '' : `data-edit-shift="${s.id}" style="cursor:pointer"`}>
       <span class="dot" style="background:${esc(site.color)}"></span>
       <div class="grow"><b>${esc(site.name)}</b><span>${fmtDate(s.start)} · ${fmtTime(s.start)} → ${fmtTime(s.end)}</span></div>
       <span class="log-dur">${fmtDur(s.end - s.start)}</span>
@@ -309,7 +309,8 @@ async function shareMonth() {
   const name = csvName(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`);
   const csv = buildCsv(startOfMonth());
   const file = new File([csv], name, { type: 'text/csv' });
-  const text = `Timbrature di ${fullName()} – ${label}`;
+  const tot = db.shifts.filter(s => s.start >= startOfMonth()).reduce((a, s) => a + (s.end - s.start), 0);
+  const text = `Timbrature di ${fullName()} – ${label}: ${fmtDur(tot)} in totale.`;
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try { await navigator.share({ files: [file], title: text, text }); } catch (e) { /* annullato */ }
   } else {
@@ -332,17 +333,27 @@ function importBackup() {
   };
   inp.click();
 }
-$('#btnMenu').onclick = () => openDialog(`
+// Dipendente collegato: menu ridotto (invia e scarica le proprie timbrature).
+// Telefono del responsabile (o non collegato): menu completo.
+const isEmployee = () => !!db.endpoint && !db.adminDevice;
+$('#btnMenu').onclick = () => openDialog(isEmployee() ? `
   <h3>Menu</h3>
   <p>${esc(syncStatus())}</p>
   <div class="menu">
-    <button class="btn" value="share">📤 Invia timbrature del mese</button>
+    <button class="btn" value="share">📤 Invia le mie timbrature al responsabile (WhatsApp)</button>
+    <button class="btn ghost" value="csv">⬇︎ Scarica le mie timbrature (Excel)</button>
+    <button class="btn ghost" value="">Chiudi</button>
+  </div>` : `
+  <h3>Menu</h3>
+  <p>${esc(syncStatus())}</p>
+  <div class="menu">
+    ${db.endpoint ? '<button class="btn" value="admin">🔒 Area responsabile</button>' : ''}
+    <button class="btn ghost" value="share">📤 Invia timbrature del mese</button>
     <button class="btn ghost" value="csv">⬇︎ Esporta tutte le timbrature (Excel)</button>
     <button class="btn ghost" value="profile">👤 Cambia nome e cognome</button>
     <button class="btn ghost" value="backup">💾 Salva backup completo</button>
     <button class="btn ghost" value="restore">♻︎ Ripristina da backup</button>
     <button class="btn ghost" value="nfc">🏷️ Link da scrivere sul tag NFC</button>
-    <button class="btn ghost" value="admin">🔒 Area responsabile</button>
     <button class="btn ghost" value="">Chiudi</button>
   </div>`, action => {
   if (action === 'share') shareMonth();
@@ -351,10 +362,18 @@ $('#btnMenu').onclick = () => openDialog(`
   if (action === 'backup') download(`timbra-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(db, null, 2), 'application/json');
   if (action === 'restore') importBackup();
   if (action === 'nfc') setTimeout(showNfcLink, 50);
-  if (action === 'admin') setTimeout(() => db.endpoint ? adminLogin() : openDialog(`
-    <h3>🔒 Area responsabile</h3>
-    <p>Questo telefono non è ancora collegato al registro aziendale. Apri prima il link di collegamento (quello con <b>?collega=</b>), poi torna qui.</p>
-    <button class="btn" value="">OK</button>`), 50);
+  if (action === 'admin') setTimeout(adminLogin, 50);
+});
+
+// Accesso nascosto all'area responsabile: 5 tocchi veloci sul logo.
+let logoTaps = [];
+$('.logo').addEventListener('click', () => {
+  const now = Date.now();
+  logoTaps = logoTaps.filter(t => now - t < 3000).concat(now);
+  if (logoTaps.length < 5) return;
+  logoTaps = [];
+  if (!db.endpoint) return toast('Telefono non collegato al registro aziendale');
+  adminLogin();
 });
 function showNfcLink() {
   const link = location.origin + location.pathname + '?nfc=1';
@@ -528,6 +547,7 @@ function adminCreatePassword(msg) {
 }
 
 function adminHome() {
+  if (!db.adminDevice) { db.adminDevice = true; save(); }
   openDialog(`
     <h3>🔒 Area responsabile</h3>
     <div class="menu">
@@ -536,6 +556,7 @@ function adminHome() {
       <button class="btn ghost" value="shifts">✏️ Modifica timbrature dei dipendenti</button>
       <button class="btn ghost" value="pwd">🔑 Cambia password</button>
       <button class="btn ghost" value="logout">Esci dall'area responsabile</button>
+      <button class="btn ghost" value="forget">Nascondi l'area responsabile su questo telefono</button>
       <button class="btn" value="">Chiudi</button>
     </div>`, a => {
     const go = {
@@ -544,6 +565,7 @@ function adminHome() {
       shifts: adminShiftsPick,
       pwd: adminChangePassword,
       logout: () => { adminPwd = null; toast('Uscito dall\'area responsabile'); },
+      forget: () => { adminPwd = null; db.adminDevice = false; save(); toast('Per rientrare: 5 tocchi veloci sul logo'); },
     }[a];
     if (go) setTimeout(go, 50);
   });
