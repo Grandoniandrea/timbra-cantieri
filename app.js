@@ -342,7 +342,7 @@ $('#btnMenu').onclick = () => openDialog(`
     <button class="btn ghost" value="backup">💾 Salva backup completo</button>
     <button class="btn ghost" value="restore">♻︎ Ripristina da backup</button>
     <button class="btn ghost" value="nfc">🏷️ Link da scrivere sul tag NFC</button>
-    ${db.endpoint ? '<button class="btn ghost" value="admin">🔒 Gestisci cantieri (responsabile)</button>' : ''}
+    ${db.endpoint ? '<button class="btn ghost" value="admin">🔒 Area responsabile</button>' : ''}
     <button class="btn ghost" value="">Chiudi</button>
   </div>`, action => {
   if (action === 'share') shareMonth();
@@ -467,54 +467,250 @@ async function syncSites() {
   } catch (e) { /* offline: si tengono i cantieri già scaricati */ }
 }
 
-// ---------- Gestione cantieri (solo responsabile, password verificata dallo script) ----------
+// ---------- Pannello responsabile (password verificata dallo script) ----------
 let adminPwd = null; // solo in memoria: chiusa l'app, la password va reinserita
-async function adminCall(azione, cantieri) {
-  const res = await fetch(db.endpoint, { method: 'POST', body: JSON.stringify({ admin: { password: adminPwd, azione, cantieri } }) });
+let adminMonth = null; // 'AAAA-MM' scelto nel pannello
+async function adminCall(azione, extra) {
+  const res = await fetch(db.endpoint, { method: 'POST', body: JSON.stringify({ admin: Object.assign({ password: adminPwd, azione }, extra || {}) }) });
   return res.json();
 }
+const monthNow = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
+const monthParts = m => ({ anno: Number(m.slice(0, 4)), mese: Number(m.slice(5, 7)) - 1 });
+const monthInput = () => `<label>Mese<input type="month" name="mese" value="${adminMonth || monthNow()}" required></label>`;
+function busy(text) { openDialog(`<h3>${esc(text)}</h3><p>Un attimo…</p>`); }
+function fail(msg) { openDialog(`<h3>Errore</h3><p>${esc(msg)}</p><button class="btn" value="back">Indietro</button>`, () => setTimeout(adminHome, 50)); }
+function call(azione, extra, waitText, onOk) {
+  busy(waitText);
+  adminCall(azione, extra).then(out => {
+    if (out.ok) onOk(out);
+    else if (out.error === 'password' || out.error === 'bloccato') { adminPwd = null; setTimeout(() => adminLogin(out.msg), 50); }
+    else fail(out.msg || 'Qualcosa non ha funzionato.');
+  }).catch(() => fail('Serve la connessione internet.'));
+}
+
 function adminLogin(msg) {
+  if (adminPwd) return adminHome();
   openDialog(`
-    <h3>🔒 Gestione cantieri</h3>
-    <p>${esc(msg || 'Riservato al responsabile.')}</p>
+    <h3>🔒 Area responsabile</h3>
+    <p>${esc(msg || 'Inserisci la tua password.')}</p>
     <label>Password<input type="password" name="pwd" required autocomplete="current-password"></label>
     <div class="row"><button class="btn ghost" value="" formnovalidate>Annulla</button><button class="btn" value="ok">Entra</button></div>`,
     (a, fd) => {
       adminPwd = String(fd.get('pwd') || '');
+      busy('Controllo password');
       adminCall('leggi').then(out => {
-        if (out.ok) adminEditor(out.cantieri);
+        if (out.ok) adminHome();
+        else if (out.error === 'nopass') { adminPwd = null; adminCreatePassword(); }
         else { adminPwd = null; adminLogin(out.msg || 'Errore.'); }
       }).catch(() => { adminPwd = null; adminLogin('Serve la connessione internet.'); });
     });
 }
-function adminEditor(list) {
+
+function adminCreatePassword(msg) {
+  openDialog(`
+    <h3>🔒 Crea la tua password</h3>
+    <p>${esc(msg || 'È la prima volta: scegli la password del responsabile (almeno 6 caratteri). Non dirla ai dipendenti.')}</p>
+    <label>Nuova password<input type="password" name="p1" required minlength="6" autocomplete="new-password"></label>
+    <label>Ripeti password<input type="password" name="p2" required minlength="6" autocomplete="new-password"></label>
+    <div class="row"><button class="btn ghost" value="" formnovalidate>Annulla</button><button class="btn" value="ok">Crea</button></div>`,
+    (a, fd) => {
+      const p1 = String(fd.get('p1')), p2 = String(fd.get('p2'));
+      if (p1 !== p2) { setTimeout(() => adminCreatePassword('Le due password non coincidono. Riprova.'), 50); return; }
+      busy('Salvo la password');
+      adminCall('imposta', { nuova: p1 }).then(out => {
+        if (out.ok) { adminPwd = p1; adminHome(); toast('Password creata'); }
+        else adminCreatePassword(out.msg);
+      }).catch(() => fail('Serve la connessione internet.'));
+    });
+}
+
+function adminHome() {
+  openDialog(`
+    <h3>🔒 Area responsabile</h3>
+    <div class="menu">
+      <button class="btn ghost" value="sites">🏗️ Cantieri: aggiungi, togli, rinomina</button>
+      <button class="btn ghost" value="report">📊 Report del mese: PDF, stampa, email, condividi</button>
+      <button class="btn ghost" value="shifts">✏️ Modifica timbrature dei dipendenti</button>
+      <button class="btn ghost" value="pwd">🔑 Cambia password</button>
+      <button class="btn ghost" value="logout">Esci dall'area responsabile</button>
+      <button class="btn" value="">Chiudi</button>
+    </div>`, a => {
+    const go = {
+      sites: () => call('leggi', null, 'Carico i cantieri', out => adminSites(out.cantieri)),
+      report: adminReportPick,
+      shifts: adminShiftsPick,
+      pwd: adminChangePassword,
+      logout: () => { adminPwd = null; toast('Uscito dall\'area responsabile'); },
+    }[a];
+    if (go) setTimeout(go, 50);
+  });
+}
+
+// --- Cantieri
+function adminSites(list) {
   const row = (c, i) => `<div class="adm-row">
       <input name="n${i}" value="${esc(c.nome)}" maxlength="60" placeholder="Nome cantiere">
       <label class="adm-on"><input type="checkbox" name="a${i}" ${c.attivo ? 'checked' : ''}> Attivo</label>
     </div>`;
   openDialog(`
-    <h3>Cantieri</h3>
+    <h3>🏗️ Cantieri</h3>
     <p>Togli la spunta per nascondere un cantiere: le timbrature fatte restano. Per eliminarlo svuota il nome.</p>
     <div class="adm-list" id="admList">${list.map(row).join('')}</div>
     <button type="button" class="btn ghost" id="admAdd">+ Aggiungi cantiere</button>
-    <div class="row"><button class="btn ghost" value="" formnovalidate>Annulla</button><button class="btn" value="save">Salva</button></div>`,
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn" value="save">Salva</button></div>`,
     (a, fd) => {
+      if (a === 'back') return setTimeout(adminHome, 50);
       const n = $('#admList').children.length;
       const cantieri = [];
       for (let i = 0; i < n; i++) {
         const nome = String(fd.get('n' + i) || '').trim();
         if (nome) cantieri.push({ nome, attivo: fd.get('a' + i) === 'on' });
       }
-      adminCall('salva', cantieri).then(out => {
-        if (out.ok) { toast('Cantieri salvati: arrivano su tutti i telefoni'); syncSites(); }
-        else alert(out.msg || 'Errore nel salvataggio.');
-      }).catch(() => alert('Serve la connessione internet.'));
+      setTimeout(() => call('salva', { cantieri }, 'Salvo i cantieri', () => {
+        toast('Cantieri salvati: arrivano su tutti i telefoni'); syncSites(); adminHome();
+      }), 50);
     });
   $('#admAdd').onclick = () => {
     const i = $('#admList').children.length;
     $('#admList').insertAdjacentHTML('beforeend', row({ nome: '', attivo: true }, i));
     $('#admList').lastElementChild.querySelector('input').focus();
   };
+}
+
+// --- Report
+function adminReportPick() {
+  openDialog(`
+    <h3>📊 Report del mese</h3>
+    ${monthInput()}
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn" value="ok">Mostra</button></div>`,
+    (a, fd) => {
+      if (a === 'back') return setTimeout(adminHome, 50);
+      adminMonth = String(fd.get('mese'));
+      setTimeout(() => call('report', monthParts(adminMonth), 'Preparo il report', adminReport), 50);
+    });
+}
+const num = v => typeof v === 'number' ? String(v).replace('.', ',') : esc(v);
+function reportTable(r) {
+  return `<table class="rep"><thead><tr>${r.intest.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>
+    ${r.righe.map(row => `<tr>${row.map(v => `<td>${num(v)}</td>`).join('')}</tr>`).join('')}
+    <tr class="tot">${r.totale.map(v => `<td>${num(v)}</td>`).join('')}</tr></tbody></table>`;
+}
+let lastReport = null;
+function adminReport(r) {
+  lastReport = r;
+  openDialog(`
+    <h3>Ore del personale – ${esc(r.nomeMese)}</h3>
+    ${r.righe.length ? `<div class="rep-wrap">${reportTable(r)}</div>` : '<p>Nessuna timbratura in questo mese.</p>'}
+    <div class="menu">
+      <button class="btn" value="pdf">📄 Scarica / condividi PDF</button>
+      <button class="btn ghost" value="print">🖨️ Stampa</button>
+      <button class="btn ghost" value="email">📧 Invia per email al responsabile</button>
+      <button class="btn ghost" value="back">Indietro</button>
+    </div>`, a => {
+    const p = monthParts(adminMonth);
+    if (a === 'back') setTimeout(adminHome, 50);
+    if (a === 'print') setTimeout(() => printReport(r), 50);
+    if (a === 'email') setTimeout(() => call('email', p, 'Invio l\'email', () => { toast('Email inviata ✓'); adminReport(r); }), 50);
+    if (a === 'pdf') setTimeout(() => call('pdf', p, 'Creo il PDF', out => { sharePdf(out); adminReport(r); }), 50);
+  });
+}
+async function sharePdf(out) {
+  const bytes = Uint8Array.from(atob(out.base64), c => c.charCodeAt(0));
+  const file = new File([bytes], out.nome, { type: 'application/pdf' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: out.nome }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = out.nome;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function printReport(r) {
+  $('#printArea').innerHTML = `<img src="logo.png" alt="GE3CO" class="print-logo">
+    <h1>Ore del personale – ${esc(r.nomeMese)}</h1>${reportTable(r)}
+    <p class="print-foot">Stampato il ${new Date().toLocaleDateString('it-IT')}</p>`;
+  if (dlg.open) dlg.close();
+  setTimeout(() => { window.print(); setTimeout(() => adminReport(r), 300); }, 100);
+}
+
+// --- Timbrature
+let adminShifts = null, adminSitesList = [];
+function adminShiftsPick() {
+  openDialog(`
+    <h3>✏️ Timbrature dei dipendenti</h3>
+    ${monthInput()}
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn" value="ok">Mostra</button></div>`,
+    (a, fd) => {
+      if (a === 'back') return setTimeout(adminHome, 50);
+      adminMonth = String(fd.get('mese'));
+      setTimeout(loadShifts, 50);
+    });
+}
+function loadShifts(filter) {
+  call('timbrature', monthParts(adminMonth), 'Carico le timbrature', out => {
+    adminShifts = out.timbrature; adminSitesList = out.cantieri; adminShiftList(filter || '');
+  });
+}
+function adminShiftList(filter) {
+  const people = [...new Set(adminShifts.map(t => t.dip))].sort();
+  const list = adminShifts.filter(t => !filter || t.dip === filter);
+  openDialog(`
+    <h3>✏️ Timbrature</h3>
+    <label>Dipendente<select id="admWho"><option value="">Tutti</option>${people.map(p => `<option ${p === filter ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
+    <div class="adm-list">${list.length ? list.map(t => `
+      <button type="button" class="shift-row" data-sid="${esc(t.id)}">
+        <b>${esc(t.dip)}</b> · ${esc(t.cantiere)}<br>
+        <span>${fmtDate(t.start)} · ${fmtTime(t.start)} → ${t.end ? fmtTime(t.end) + ' · ' + fmtDur(t.end - t.start) : '<em>in corso</em>'}</span>
+      </button>`).join('') : '<p>Nessuna timbratura.</p>'}</div>
+    <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(adminHome, 50));
+  $('#admWho').onchange = e => adminShiftList(e.target.value);
+  document.querySelectorAll('[data-sid]').forEach(b => { b.onclick = () => adminShiftEdit(b.dataset.sid, filter); });
+}
+function adminShiftEdit(id, filter) {
+  const t = adminShifts.find(x => x.id === id);
+  const names = adminSitesList.map(c => c.nome);
+  if (!names.includes(t.cantiere)) names.unshift(t.cantiere);
+  openDialog(`
+    <h3>${esc(t.dip)}</h3>
+    <label>Cantiere<select name="site">${names.map(n => `<option ${n === t.cantiere ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+    <label>Entrata<input type="datetime-local" name="start" required value="${toLocalInput(t.start)}"></label>
+    <label>Uscita<input type="datetime-local" name="end" value="${t.end ? toLocalInput(t.end) : ''}"></label>
+    <div class="row">
+      <button class="btn ghost" value="delete" formnovalidate style="color:var(--danger)">Elimina</button>
+      <button class="btn ghost" value="back" formnovalidate>Indietro</button>
+      <button class="btn" value="save">Salva</button>
+    </div>`, (a, fd) => {
+    if (a === 'back') return setTimeout(() => adminShiftList(filter), 50);
+    if (a === 'delete') {
+      if (!confirm(`Eliminare la timbratura di ${t.dip}?`)) return false;
+      return setTimeout(() => call('elimina', { id }, 'Elimino', () => { toast('Timbratura eliminata'); loadShifts(filter); }), 50);
+    }
+    const start = new Date(fd.get('start')).getTime();
+    const endVal = fd.get('end');
+    const end = endVal ? new Date(endVal).getTime() : null;
+    if (end !== null && !(end > start)) { alert("L'uscita deve essere dopo l'entrata."); return false; }
+    setTimeout(() => call('modifica', { t: { id, start, end, cantiere: fd.get('site') } }, 'Salvo', () => {
+      toast('Timbratura modificata ✓'); loadShifts(filter);
+    }), 50);
+  });
+}
+
+// --- Password
+function adminChangePassword(msg) {
+  openDialog(`
+    <h3>🔑 Cambia password</h3>
+    ${msg ? `<p>${esc(msg)}</p>` : ''}
+    <label>Nuova password<input type="password" name="p1" required minlength="6" autocomplete="new-password"></label>
+    <label>Ripeti password<input type="password" name="p2" required minlength="6" autocomplete="new-password"></label>
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn" value="ok">Salva</button></div>`,
+    (a, fd) => {
+      if (a === 'back') return setTimeout(adminHome, 50);
+      const p1 = String(fd.get('p1')), p2 = String(fd.get('p2'));
+      if (p1 !== p2) return setTimeout(() => adminChangePassword('Le due password non coincidono.'), 50);
+      setTimeout(() => call('cambiapassword', { nuova: p1 }, 'Salvo la password', () => {
+        adminPwd = p1; toast('Password cambiata ✓'); adminHome();
+      }), 50);
+    });
 }
 
 // Link di collegamento che il responsabile manda ai dipendenti: ...?collega=<URL web app>

@@ -81,18 +81,77 @@ function foglioCantieri_() {
 // La password si imposta in Impostazioni progetto → Proprietà script → PASSWORD_ADMIN.
 
 function admin_(req) {
+  const props = PropertiesService.getScriptProperties();
+  const giusta = props.getProperty('PASSWORD_ADMIN');
+  // Prima volta: la password la crea il responsabile dall'app.
+  if (!giusta) {
+    if (req.azione !== 'imposta') return { ok: false, error: 'nopass', msg: 'Crea la password del responsabile.' };
+    const nuova = String(req.nuova || '');
+    if (nuova.length < 6) return { ok: false, error: 'corta', msg: 'La password deve avere almeno 6 caratteri.' };
+    props.setProperty('PASSWORD_ADMIN', nuova);
+    return { ok: true };
+  }
   const cache = CacheService.getScriptCache();
   const tentativi = Number(cache.get('tentativi_admin') || 0);
   if (tentativi >= 5) return { ok: false, error: 'bloccato', msg: 'Troppi tentativi sbagliati. Riprova tra 15 minuti.' };
-  const giusta = PropertiesService.getScriptProperties().getProperty('PASSWORD_ADMIN');
-  if (!giusta) return { ok: false, error: 'nopass', msg: 'Password non ancora impostata nello script.' };
   if (String(req.password || '') !== giusta) {
     cache.put('tentativi_admin', String(tentativi + 1), 900);
     return { ok: false, error: 'password', msg: 'Password sbagliata.' };
   }
   cache.remove('tentativi_admin');
-  if (req.azione === 'salva') salvaCantieri_(req.cantieri);
-  return { ok: true, cantieri: tuttiCantieri_() };
+
+  const anno = Number(req.anno), mese = Number(req.mese);
+  switch (req.azione) {
+    case 'salva': salvaCantieri_(req.cantieri); return { ok: true, cantieri: tuttiCantieri_() };
+    case 'report': {
+      const r = creaRiepilogo_(anno, mese);
+      return { ok: true, nomeMese: r.nomeMese, intest: r.intest, righe: r.righe, totale: r.totale };
+    }
+    case 'pdf': {
+      const r = creaRiepilogo_(anno, mese);
+      SpreadsheetApp.flush();
+      const blob = esporta_(r.sheetId, 'pdf');
+      return { ok: true, nome: 'GE3CO ' + r.titolo + '.pdf', base64: Utilities.base64Encode(blob.getBytes()) };
+    }
+    case 'email': inviaRiepilogo_(anno, mese); return { ok: true };
+    case 'timbrature': return { ok: true, timbrature: timbratureMese_(anno, mese), cantieri: tuttiCantieri_() };
+    case 'modifica': modificaTimbratura_(req.t); return { ok: true };
+    case 'elimina': remove_(req.id); return { ok: true };
+    case 'cambiapassword': {
+      const nuova = String(req.nuova || '');
+      if (nuova.length < 6) return { ok: false, msg: 'La password deve avere almeno 6 caratteri.' };
+      props.setProperty('PASSWORD_ADMIN', nuova);
+      return { ok: true };
+    }
+    default: return { ok: true, cantieri: tuttiCantieri_() };
+  }
+}
+
+function esporta_(sheetId, formato) {
+  const url = 'https://docs.google.com/spreadsheets/d/' + ID_FOGLIO + '/export?format=' + formato + '&gid=' + sheetId +
+    (formato === 'pdf' ? '&portrait=false&fitw=true&gridlines=false&sheetnames=false&printtitle=false' : '');
+  return UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } }).getBlob();
+}
+
+function timbratureMese_(anno, mese) {
+  const sh = foglio_();
+  if (sh.getLastRow() < 2) return [];
+  const da = new Date(anno, mese, 1), a = new Date(anno, mese + 1, 1);
+  return sh.getRange(2, 1, sh.getLastRow() - 1, INTESTAZIONE.length).getValues()
+    .filter(r => r[4] instanceof Date && r[4] >= da && r[4] < a)
+    .map(r => ({ id: String(r[0]), dip: String(r[1]), cantiere: String(r[3]),
+      start: r[4].getTime(), end: r[5] instanceof Date ? r[5].getTime() : null }))
+    .sort((x, y) => y.start - x.start);
+}
+
+function modificaTimbratura_(t) {
+  if (!t || !t.id) return;
+  const sh = foglio_();
+  const r = trovaRiga_(sh, t.id);
+  if (!r) return;
+  const dip = sh.getRange(r, 2).getValue();
+  const tel = sh.getRange(r, 9).getValue();
+  upsert_({ id: t.id, start: t.start, end: t.end, site: t.cantiere }, { name: dip, device: tel });
 }
 
 function tuttiCantieri_() {
@@ -256,7 +315,11 @@ function round2_(n) { return Math.round(n * 100) / 100; }
 function inviaRiepilogoMeseScorso() {
   const d = new Date();
   d.setDate(1); d.setMonth(d.getMonth() - 1);
-  const r = creaRiepilogo_(d.getFullYear(), d.getMonth());
+  inviaRiepilogo_(d.getFullYear(), d.getMonth());
+}
+
+function inviaRiepilogo_(anno, mese) {
+  const r = creaRiepilogo_(anno, mese);
   const ss = ss_();
   const link = ss.getUrl() + '#gid=' + r.sheetId;
 
@@ -267,9 +330,8 @@ function inviaRiepilogoMeseScorso() {
     '</table>';
 
   // Allegato Excel del foglio riepilogo
-  const url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=xlsx&gid=' + r.sheetId;
-  const xlsx = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } })
-    .getBlob().setName(r.titolo + '.xlsx');
+  SpreadsheetApp.flush();
+  const xlsx = esporta_(r.sheetId, 'xlsx').setName(r.titolo + '.xlsx');
 
   MailApp.sendEmail({
     to: EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail(),

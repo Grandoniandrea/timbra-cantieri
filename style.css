@@ -147,3 +147,24 @@ dialog input, dialog select {
 .adm-row > input { flex: 1; min-width: 0; }
 .adm-on { display: flex !important; align-items: center; gap: 6px; font-weight: 500 !important; white-space: nowrap; }
 .adm-on input { width: 22px; min-height: 22px; height: 22px; }
+.rep-wrap { overflow-x: auto; }
+.rep { border-collapse: collapse; font-size: 13px; width: 100%; }
+.rep th, .rep td { border: 1px solid var(--line); padding: 6px 8px; text-align: right; white-space: nowrap; }
+.rep th:first-child, .rep td:first-child { text-align: left; }
+.rep th { background: var(--brand-soft); }
+.rep .tot td { font-weight: 700; }
+.shift-row {
+  display: block; width: 100%; text-align: left; font: inherit; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer;
+}
+.shift-row span { font-size: 13px; color: var(--muted); }
+#printArea { display: none; }
+@media print {
+  body > *:not(#printArea) { display: none !important; }
+  #printArea { display: block; color: #000; background: #fff; font-family: Arial, sans-serif; }
+  #printArea .rep th, #printArea .rep td { border-color: #999; color: #000; }
+  #printArea .rep th { background: #e7f2ea; }
+  .print-logo { height: 48px; }
+  #printArea h1 { font-size: 20px; margin: 12px 0; }
+  .print-foot { font-size: 11px; color: #555; }
+}
