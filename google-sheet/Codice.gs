@@ -23,6 +23,7 @@ function configura() {
   ScriptApp.newTrigger('onOpen').forSpreadsheet(ID_FOGLIO).onOpen().create();
   ScriptApp.newTrigger('inviaRiepilogoMeseScorso').timeBased().onMonthDay(1).atHour(7).create();
   foglio_();
+  foglioCantieri_();
 }
 
 // ---------- Ricezione dall'app ----------
@@ -48,8 +49,39 @@ function doPost(e) {
 }
 
 // Apri l'URL della web app nel browser per verificare che funzioni.
-function doGet() {
+function doGet(e) {
+  if (e && e.parameter && e.parameter.azione === 'cantieri') return json_({ ok: true, cantieri: cantieri_() });
   return json_({ ok: true, app: 'Timbra Cantieri' });
+}
+
+// ---------- Elenco cantieri (scheda "Cantieri", gestita dal responsabile) ----------
+
+const FOGLIO_CANTIERI = 'Cantieri';
+const CANTIERI_INIZIALI = ['PISA', 'SAN GIULIANO TERME', 'CASCINA', 'CALCINAIA', 'PONTEDERA',
+  'MONTOPOLI', 'SANTA MARIA A MONTE', 'PONSACCO', 'CASCIANA TERME / LARI', 'CAPANNOLI'];
+
+function foglioCantieri_() {
+  const ss = ss_();
+  let sh = ss.getSheetByName(FOGLIO_CANTIERI);
+  if (!sh) {
+    sh = ss.insertSheet(FOGLIO_CANTIERI);
+    sh.getRange(1, 1, 1, 2).setValues([['Cantiere', 'Attivo']]).setFontWeight('bold').setBackground('#e7f2ea');
+    sh.getRange(2, 1, CANTIERI_INIZIALI.length, 2).setValues(CANTIERI_INIZIALI.map(n => [n, 'SI']));
+    sh.getRange(2, 2, 200, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['SI', 'NO']).build());
+    sh.setFrozenRows(1);
+    sh.setColumnWidth(1, 260);
+    sh.getRange('D1').setValue('Scrivi un cantiere per riga. "NO" in Attivo lo nasconde dall\'app senza perdere le timbrature.')
+      .setFontStyle('italic').setFontColor('#6b766e');
+  }
+  return sh;
+}
+
+function cantieri_() {
+  const sh = foglioCantieri_();
+  if (sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues()
+    .filter(r => String(r[0]).trim() && String(r[1]).trim().toUpperCase() !== 'NO')
+    .map(r => String(r[0]).trim().toUpperCase());
 }
 
 function json_(obj) {

@@ -121,12 +121,16 @@ function render() {
   $('#statMonthN').textContent = `${n} turn${n === 1 ? 'o' : 'i'} conclus${n === 1 ? 'o' : 'i'}`;
 
   // Cantieri
-  $('#sites').innerHTML = db.sites.length ? db.sites.map(s => {
+  const managed = !!db.endpoint;
+  $('#btnAddSite').hidden = managed;
+  $('#sitesNote').hidden = !managed;
+  const shown = db.sites.filter(s => !s.hidden);
+  $('#sites').innerHTML = shown.length ? shown.map(s => {
     const here = db.active && db.active.siteId === s.id;
     return `<li>
       <span class="dot" style="background:${esc(s.color)}"></span>
       <div class="grow"><b>${esc(s.name)}</b><span>${here ? 'In corso' : 'Pronto'}</span></div>
-      <button class="icon-btn" data-edit-site="${s.id}" aria-label="Modifica ${esc(s.name)}">✎</button>
+      ${managed ? '' : `<button class="icon-btn" data-edit-site="${s.id}" aria-label="Modifica ${esc(s.name)}">✎</button>`}
       <button class="btn" data-in="${s.id}" ${db.active ? 'disabled' : ''}>Entrata</button>
     </li>`;
   }).join('') : '<li class="empty">Nessun cantiere. Aggiungine uno con + Nuovo.</li>';
@@ -201,7 +205,7 @@ function editShift(id) {
   if (!s) return;
   openDialog(`
     <h3>Modifica timbratura</h3>
-    <label>Cantiere<select name="site">${db.sites.map(x => `<option value="${x.id}" ${x.id === s.siteId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+    <label>Cantiere<select name="site">${db.sites.filter(x => !x.hidden || x.id === s.siteId).map(x => `<option value="${x.id}" ${x.id === s.siteId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
     <label>Entrata<input type="datetime-local" name="start" required value="${toLocalInput(s.start)}"></label>
     <label>Uscita<input type="datetime-local" name="end" required value="${toLocalInput(s.end)}"></label>
     <div class="row">
@@ -229,7 +233,7 @@ function pickSiteForNfc() {
   openDialog(`
     <h3>Dove sei oggi?</h3>
     <p>Scegli il cantiere per timbrare l'entrata.</p>
-    <div class="pick">${db.sites.map(s => `<button value="${s.id}"><span class="dot" style="background:${esc(s.color)}"></span>${esc(s.name)}</button>`).join('')}</div>
+    <div class="pick">${db.sites.filter(s => !s.hidden).map(s => `<button value="${s.id}"><span class="dot" style="background:${esc(s.color)}"></span>${esc(s.name)}</button>`).join('')}</div>
     <button class="btn ghost" value="">Annulla</button>`, siteId => {
     clockIn(siteId);
     const undo = () => { if (db.active) enqueueDelete(db.active.id); db.active = null; save(); };
@@ -437,6 +441,27 @@ async function flush() {
   } catch (e) { /* offline o server non raggiungibile: si riprova dopo */ }
   flushing = false;
 }
+// Elenco cantieri preso dal Google Sheet del responsabile (scheda "Cantieri").
+// I cantieri già presenti mantengono il loro id, così le timbrature restano collegate.
+async function syncSites() {
+  if (!db.endpoint || navigator.onLine === false) return;
+  try {
+    const res = await fetch(db.endpoint + '?azione=cantieri');
+    const out = await res.json();
+    if (!out.ok || !Array.isArray(out.cantieri)) return;
+    const names = out.cantieri;
+    const byName = new Map(db.sites.map(s => [s.name, s]));
+    const visible = names.map((name, i) => {
+      const old = byName.get(name);
+      return { id: old ? old.id : uid() + i, name, color: old ? old.color : COLORS[i % COLORS.length] };
+    });
+    // Quelli tolti dal foglio restano nascosti per i nomi nel registro.
+    const hidden = db.sites.filter(s => !names.includes(s.name)).map(s => Object.assign({}, s, { hidden: true }));
+    const next = visible.concat(hidden.filter(h => !visible.some(v => v.id === h.id)));
+    if (JSON.stringify(next) !== JSON.stringify(db.sites)) { db.sites = next; save(); }
+  } catch (e) { /* offline: si tengono i cantieri già scaricati */ }
+}
+
 // Link di collegamento che il responsabile manda ai dipendenti: ...?collega=<URL web app>
 function handleConnect() {
   const params = new URLSearchParams(location.search);
@@ -455,6 +480,7 @@ function handleConnect() {
       db.endpoint = url;
       if (db.user) resyncAll();
       save();
+      syncSites();
       toast('Collegato al registro aziendale ✓');
     });
   return true;
@@ -464,7 +490,8 @@ function handleConnect() {
 render();
 const afterProfile = () => { if (!handleConnect()) handleNfc(); };
 if (db.user) afterProfile(); else editProfile(afterProfile);
-window.addEventListener('online', flush);
+window.addEventListener('online', () => { flush(); syncSites(); });
+syncSites();
 setInterval(flush, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); db.queue = db.queue || []; render(); flush(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); db.queue = db.queue || []; render(); flush(); syncSites(); } });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

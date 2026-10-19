@@ -140,3 +140,5 @@ dialog input, dialog select {
 .toast[hidden] { display: none; }
 .toast button { background: none; border: 0; color: inherit; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
 .foot { text-align: center; font-size: 13px; color: var(--muted); }
+.note { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.btn[hidden], .note[hidden] { display: none; }
