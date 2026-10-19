@@ -22,6 +22,7 @@ function load() {
     sites: DEFAULT_SITES.map((name, i) => ({ id: uid() + i, name, color: COLORS[i % COLORS.length] })),
     shifts: [],
     active: null,
+    user: null,
   };
 }
 let db = load();
@@ -81,6 +82,7 @@ function clockOut() {
 // ---------- Render ----------
 let timer;
 function render() {
+  $('#btnWho').textContent = db.user ? fullName() : 'Inserisci il tuo nome';
   // Stato in alto
   const st = $('#status');
   clearInterval(timer);
@@ -149,6 +151,7 @@ const dlg = $('#dlg');
 function openDialog(html, onSubmit) {
   $('#dlgBody').innerHTML = html;
   dlg.onclose = null;
+  dlg.oncancel = null;
   $('#dlgBody').onsubmit = e => {
     const btn = e.submitter;
     if (btn && btn.value && onSubmit) {
@@ -271,14 +274,34 @@ function download(name, text, type) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
-function exportCsv() {
-  const rows = [['Data', 'Cantiere', 'Entrata', 'Uscita', 'Minuti', 'Ore']];
-  db.shifts.slice().sort((a, b) => a.start - b.start).forEach(s => {
+const fullName = () => db.user ? `${db.user.first} ${db.user.last}` : '';
+function buildCsv(from) {
+  const rows = [['Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Minuti', 'Ore']];
+  db.shifts.filter(s => s.start >= from).sort((a, b) => a.start - b.start).forEach(s => {
     const min = Math.round((s.end - s.start) / 60000);
-    rows.push([new Date(s.start).toLocaleDateString('it-IT'), siteById(s.siteId).name, fmtTime(s.start), fmtTime(s.end), min, (min / 60).toFixed(2).replace('.', ',')]);
+    rows.push([fullName(), new Date(s.start).toLocaleDateString('it-IT'), siteById(s.siteId).name, fmtTime(s.start), fmtTime(s.end), min, (min / 60).toFixed(2).replace('.', ',')]);
   });
-  const csv = '﻿' + rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
-  download(`timbrature-${new Date().toISOString().slice(0, 10)}.csv`, csv, 'text/csv');
+  return '\ufeff' + rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+}
+function csvName(label) {
+  const who = fullName().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'dipendente';
+  return `timbrature-${who}-${label}.csv`;
+}
+function exportCsv() { download(csvName(new Date().toISOString().slice(0, 10)), buildCsv(0), 'text/csv'); }
+// Manda le timbrature del mese (WhatsApp, email...) con la condivisione del telefono.
+async function shareMonth() {
+  const d = new Date();
+  const label = d.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
+  const name = csvName(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`);
+  const csv = buildCsv(startOfMonth());
+  const file = new File([csv], name, { type: 'text/csv' });
+  const text = `Timbrature di ${fullName()} – ${label}`;
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: text, text }); } catch (e) { /* annullato */ }
+  } else {
+    download(name, csv, 'text/csv');
+    toast('File scaricato: allegalo a WhatsApp o email');
+  }
 }
 function importBackup() {
   const inp = document.createElement('input');
@@ -288,7 +311,7 @@ function importBackup() {
       const data = JSON.parse(await inp.files[0].text());
       if (!Array.isArray(data.sites) || !Array.isArray(data.shifts)) throw new Error();
       if (!confirm('Sostituire tutti i dati attuali con quelli del backup?')) return;
-      db = { sites: data.sites, shifts: data.shifts, active: data.active || null };
+      db = { sites: data.sites, shifts: data.shifts, active: data.active || null, user: data.user || db.user };
       save(); toast('Backup ripristinato');
     } catch (e) { alert('File di backup non valido.'); }
   };
@@ -297,13 +320,17 @@ function importBackup() {
 $('#btnMenu').onclick = () => openDialog(`
   <h3>Menu</h3>
   <div class="menu">
-    <button class="btn ghost" value="csv">⬇︎ Esporta timbrature (Excel / CSV)</button>
+    <button class="btn" value="share">📤 Invia timbrature del mese</button>
+    <button class="btn ghost" value="csv">⬇︎ Esporta tutte le timbrature (Excel)</button>
+    <button class="btn ghost" value="profile">👤 Cambia nome e cognome</button>
     <button class="btn ghost" value="backup">💾 Salva backup completo</button>
     <button class="btn ghost" value="restore">♻︎ Ripristina da backup</button>
     <button class="btn ghost" value="nfc">🏷️ Link da scrivere sul tag NFC</button>
-    <button class="btn" value="">Chiudi</button>
+    <button class="btn ghost" value="">Chiudi</button>
   </div>`, action => {
+  if (action === 'share') shareMonth();
   if (action === 'csv') exportCsv();
+  if (action === 'profile') setTimeout(() => editProfile(), 50);
   if (action === 'backup') download(`timbra-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(db, null, 2), 'application/json');
   if (action === 'restore') importBackup();
   if (action === 'nfc') setTimeout(showNfcLink, 50);
@@ -330,8 +357,33 @@ function toast(msg, undo) {
   toastTimer = setTimeout(() => { t.hidden = true; }, undo ? UNDO_MS : 3000);
 }
 
+// ---------- Profilo dipendente ----------
+function editProfile(then) {
+  const u = db.user || { first: '', last: '' };
+  const first = !db.user;
+  openDialog(`
+    <h3>${first ? 'Benvenuto!' : 'Il tuo nome'}</h3>
+    <p>${first ? 'Inserisci nome e cognome: compariranno sulle tue timbrature.' : 'Nome e cognome che compaiono sulle timbrature.'}</p>
+    <label>Nome<input name="first" required maxlength="40" autocomplete="given-name" value="${esc(u.first)}"></label>
+    <label>Cognome<input name="last" required maxlength="40" autocomplete="family-name" value="${esc(u.last)}"></label>
+    <div class="row">
+      ${first ? '' : '<button class="btn ghost" value="" formnovalidate>Annulla</button>'}
+      <button class="btn" value="save">${first ? 'Inizia' : 'Salva'}</button>
+    </div>`, (action, fd) => {
+    const cap = v => String(v || '').trim().replace(/\s+/g, ' ').replace(/(^|[\s'-])\S/g, c => c.toUpperCase());
+    const f = cap(fd.get('first')), l = cap(fd.get('last'));
+    if (!f || !l) return false;
+    db.user = { first: f, last: l };
+    save();
+    if (then) setTimeout(then, 50);
+  });
+  // Al primo avvio il nome è obbligatorio: niente chiusura con Esc.
+  dlg.oncancel = first ? e => e.preventDefault() : null;
+}
+$('#btnWho').onclick = () => editProfile();
+
 // ---------- Avvio ----------
 render();
-handleNfc();
+if (db.user) handleNfc(); else editProfile(handleNfc);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); render(); } });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
