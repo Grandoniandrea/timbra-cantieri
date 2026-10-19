@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 17;
+const APP_VERSION = 18;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -176,12 +176,21 @@ document.addEventListener('click', e => {
 
 // ---------- Dialog ----------
 const dlg = $('#dlg');
+// Pulsante premuto nel form (su alcuni iPhone e.submitter non è affidabile)
+let lastSubmitter = null;
+document.addEventListener('click', e => {
+  const b = e.target.closest('#dlgBody button');
+  if (b && b.type !== 'button') lastSubmitter = b;
+}, true);
 function openDialog(html, onSubmit) {
-  $('#dlgBody').innerHTML = html;
+  $('#dlgBody').innerHTML = html +
+    '<button type="button" class="dlg-x" aria-label="Chiudi" onclick="var d=document.getElementById(\'dlg\');d.oncancel=null;d.close()">✕</button>';
   dlg.onclose = null;
   dlg.oncancel = null;
+  lastSubmitter = null;
   $('#dlgBody').onsubmit = e => {
-    const btn = e.submitter;
+    const btn = e.submitter || lastSubmitter;
+    lastSubmitter = null;
     if (btn && btn.value && onSubmit) {
       if (onSubmit(btn.value, new FormData($('#dlgBody'))) === false) { e.preventDefault(); }
     }
@@ -444,6 +453,7 @@ function editProfile(then) {
   });
   // Al primo avvio il nome è obbligatorio: niente chiusura con Esc.
   dlg.oncancel = first ? e => e.preventDefault() : null;
+  if (first) $('#dlgBody .dlg-x').remove();
 }
 $('#btnWho').onclick = () => editProfile();
 
@@ -565,6 +575,7 @@ function justifyExtra(shift, msg) {
       setTimeout(() => askAuthorization(s), 50);
     });
   dlg.oncancel = e => e.preventDefault(); // la giustificazione è obbligatoria
+  $('#dlgBody .dlg-x').remove();
 }
 function authMessage(s) {
   return [`*Richiesta autorizzazione ore extra*`,
@@ -597,15 +608,19 @@ async function adminCall(azione, extra) {
 const monthNow = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
 const monthParts = m => ({ anno: Number(m.slice(0, 4)), mese: Number(m.slice(5, 7)) - 1 });
 const monthInput = () => `<label>Mese<input type="month" name="mese" value="${adminMonth || monthNow()}" required></label>`;
-function busy(text) { openDialog(`<h3>${esc(text)}</h3><p>Un attimo…</p>`); }
+function busy(text) { openDialog(`<h3>${esc(text)}</h3><p>Un attimo…</p><button class="btn ghost" value="">Chiudi</button>`); }
+// Una richiesta allo script che non risponde entro 30 secondi viene considerata fallita
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
 function fail(msg) { openDialog(`<h3>Errore</h3><p>${esc(msg)}</p><button class="btn" value="back">Indietro</button>`, () => setTimeout(adminHome, 50)); }
 function call(azione, extra, waitText, onOk) {
   busy(waitText);
-  adminCall(azione, extra).then(out => {
+  withTimeout(adminCall(azione, extra), 30000).then(out => {
     if (out.ok) onOk(out);
     else if (out.error === 'password' || out.error === 'bloccato') { adminPwd = null; setTimeout(() => adminLogin(out.msg), 50); }
     else fail(out.msg || 'Qualcosa non ha funzionato.');
-  }).catch(() => fail('Serve la connessione internet.'));
+  }).catch(e => fail(e && e.message === 'timeout'
+    ? 'Il registro non ha risposto. Controlla la connessione e riprova.'
+    : 'Serve la connessione internet.'));
 }
 
 function adminLogin(msg) {
@@ -705,8 +720,16 @@ function adminSites(list) {
         const nome = String(fd.get('n' + i) || '').trim();
         if (nome) cantieri.push({ nome, attivo: fd.get('a' + i) === 'on', colore: String(fd.get('c' + i) || '') });
       }
-      setTimeout(() => call('salva', { cantieri }, 'Salvo i cantieri', () => {
-        toast('Cantieri salvati: arrivano su tutti i telefoni'); syncSites(); adminHome();
+      setTimeout(() => call('salva', { cantieri }, 'Salvo i cantieri', out => {
+        const back = new Map((out.cantieri || []).map(c => [c.nome, c.colore]));
+        const ok = cantieri.every(c => back.get(c.nome.toUpperCase()) === c.colore.toLowerCase());
+        syncSites();
+        openDialog(ok ? `
+          <h3>✓ Cantieri salvati</h3>
+          <p>${cantieri.length} cantieri con i loro colori. Arrivano su tutti i telefoni alla prossima apertura dell'app.</p>
+          <div class="row"><button class="btn ghost" value="admin">Area responsabile</button><button class="btn" value="">Torna all'app</button></div>`
+          : `<h3>Attenzione</h3><p>I cantieri sono stati salvati ma i colori no. Probabilmente lo script Google è una versione vecchia: avvisa chi lo gestisce.</p>
+          <button class="btn" value="">OK</button>`, a => { if (a === 'admin') setTimeout(adminHome, 50); });
       }), 50);
     });
   // Un solo listener per la lista: apre la tavolozza e applica il colore scelto

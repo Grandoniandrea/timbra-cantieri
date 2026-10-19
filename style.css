@@ -195,3 +195,6 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 /* I pulsanti in fondo alle finestre (Salva, Indietro…) restano sempre visibili */
 dialog form > .row:last-child { position: sticky; bottom: -20px; background: var(--card); padding-block: 10px 20px; margin-bottom: -20px; z-index: 1; }
 .palette[hidden] { display: none; }
+dialog form { position: relative; }
+.dlg-x { position: absolute; top: 10px; right: 10px; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: 16px; cursor: pointer; z-index: 2; }
+dialog h3 { padding-right: 40px; }
