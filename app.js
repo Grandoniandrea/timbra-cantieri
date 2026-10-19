@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 20;
+const APP_VERSION = 21;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -132,7 +132,7 @@ function render() {
       <div class="timer" id="timer"></div>
       <div class="bar"><span id="bar"></span></div>
       <p id="left"></p>
-      <p>Entrata alle ${fmtTime(db.active.start)} · fine prevista alle ${fmtTime(db.active.start + cfg().oreTurno * 3600000)}</p>
+      <p>${esc(fasciaLabel(db.active.start))} · entrata alle ${fmtTime(db.active.start)} · fine prevista alle ${fmtTime(db.active.start + cfg().oreTurno * 3600000)}</p>
       <button class="btn big danger" id="btnOut">Timbra uscita</button>`;
     const tick = () => {
       const el = $('#timer'); if (!el || !db.active) return;
@@ -187,7 +187,7 @@ function render() {
     const site = siteById(s.siteId);
     return `<li ${isEmployee() ? '' : `data-edit-shift="${s.id}" style="cursor:pointer"`}>
       <span class="dot" style="background:${esc(site.color)}"></span>
-      <div class="grow"><b>${esc(site.name)}</b><span>${fmtDate(s.start)} · ${fmtTime(s.start)} → ${fmtTime(s.end)}</span></div>
+      <div class="grow"><b>${esc(site.name)}</b><span>${fmtDate(s.start)} · ${(fascia(s.start) || { nome: 'Fuori orario' }).nome} · ${fmtTime(s.start)} → ${fmtTime(s.end)}</span></div>
       <span class="log-dur">${fmtDur(s.end - s.start)}${extraMin(s) ? `<small class="extra-tag">+${fmtDur(extraMin(s) * 60000)} extra</small>` : ''}</span>
     </li>`;
   }).join('') : '<li class="empty">Le tue timbrature compariranno qui.</li>';
@@ -572,6 +572,16 @@ function applyReset() {
 
 // ---------- Ore extra oltre il turno standard (5 ore) ----------
 const cfg = () => Object.assign({ oreTurno: 5, tolleranzaMin: 15, autorizzaNome: '', autorizzaTelefono: '' }, db.config || {});
+// Fascia del turno dall'ora di entrata (come nello script): prima delle 12 mattina, 12–21 pomeriggio
+function fascia(t) {
+  const d = new Date(t), h = d.getHours() + d.getMinutes() / 60;
+  const turni = cfg().turni || [{ nome: 'Mattina', inizio: '06:00', fine: '11:00' }, { nome: 'Pomeriggio', inizio: '13:00', fine: '18:00' }];
+  if (h >= 4 && h < 12) return turni[0];
+  if (h >= 12 && h < 21) return turni[1];
+  return null;
+}
+const fasciaLabel = t => { const f = fascia(t); return f ? `Turno ${f.nome.toLowerCase()} (${f.inizio}–${f.fine})` : 'Turno fuori orario'; };
+
 // Minuti oltre il turno standard (0 se entro la tolleranza)
 function extraMin(s) {
   if (!s.end) return 0;
@@ -672,6 +682,7 @@ function newAbsence(msg, prev) {
       <label id="lblAl">Al<input type="date" name="al" value="${esc(v.al)}"></label>
       <label id="lblOre" hidden>Ore<input type="number" name="ore" min="0.5" max="8" step="0.5" value="${esc(v.ore)}"></label>
     </div>
+    <p class="note">Ferie e malattia contano i giorni dal lunedì al venerdì.</p>
     <label>Nota<textarea name="nota" rows="2" maxlength="300" placeholder="Es. visita medica, n. certificato…">${esc(v.nota)}</textarea></label>
     <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn" value="ok">Invia richiesta</button></div>`,
     (a, fd) => {
@@ -998,7 +1009,7 @@ function adminShiftList(filter) {
     <label>Dipendente<select id="admWho"><option value="">Tutti</option>${people.map(p => `<option ${p === filter ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
     <div class="adm-list">${list.length ? list.map(t => `
       <button type="button" class="shift-row" data-sid="${esc(t.id)}">
-        <b>${esc(t.dip)}</b> · ${esc(t.cantiere)}<br>
+        <b>${esc(t.dip)}</b> · ${esc(t.cantiere)} · ${esc(t.turno || '')}<br>
         <span>${fmtDate(t.start)} · ${fmtTime(t.start)} → ${t.end ? fmtTime(t.end) + ' · ' + fmtDur(t.end - t.start) : '<em>in corso</em>'}${t.extra ? ` · <b>+${fmtDur(t.extra * 3600000)} extra</b> (${esc(t.statoExtra || '')})` : ''}</span>
       </button>`).join('') : '<p>Nessuna timbratura.</p>'}</div>
     <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(adminHome, 50));

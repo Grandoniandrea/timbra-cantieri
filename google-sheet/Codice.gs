@@ -16,15 +16,20 @@ const EMAIL_RESPONSABILE = '';
 // Oltre ORE_TURNO + TOLLERANZA_MIN il dipendente deve giustificare: l'extra conta solo se autorizzato.
 const ORE_TURNO = 5;
 const TOLLERANZA_MIN = 15;
+// Fasce orarie dei turni (ora di inizio della timbratura -> fascia)
+const TURNI = [
+  { nome: 'Mattina', inizio: '06:00', fine: '11:00' },
+  { nome: 'Pomeriggio', inizio: '13:00', fine: '18:00' },
+];
 // Chi autorizza le ore extra (riceve la richiesta su WhatsApp). Telefono con prefisso, senza + né spazi.
 const AUTORIZZA_NOME = 'INSERISCI_NOME';
 const AUTORIZZA_TELEFONO = 'INSERISCI_TELEFONO';
 
 const FOGLIO_TIMBRATURE = 'Timbrature';
 const INTESTAZIONE = ['ID', 'Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Ore', 'Stato', 'Telefono', 'Aggiornato',
-  'Extra (ore)', 'Motivo extra', 'Nota extra', 'Stato extra', 'Posizione entrata', 'Posizione uscita'];
+  'Extra (ore)', 'Motivo extra', 'Nota extra', 'Stato extra', 'Posizione entrata', 'Posizione uscita', 'Turno'];
 // Indici (base 1) delle colonne extra e posizione
-const COL_EXTRA = 11, COL_MOTIVO = 12, COL_NOTA = 13, COL_STATO_EXTRA = 14, COL_POS_IN = 15, COL_POS_OUT = 16;
+const COL_EXTRA = 11, COL_MOTIVO = 12, COL_NOTA = 13, COL_STATO_EXTRA = 14, COL_POS_IN = 15, COL_POS_OUT = 16, COL_TURNO = 17;
 
 // Assenze (ferie, permessi, malattia)
 const FOGLIO_ASSENZE = 'Assenze';
@@ -76,7 +81,7 @@ function doGet(e) {
   }
   if (e && e.parameter && e.parameter.azione === 'cantieri') {
     return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), config: {
-      oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN,
+      oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN, turni: TURNI,
       autorizzaNome: AUTORIZZA_NOME.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_NOME,
       autorizzaTelefono: AUTORIZZA_TELEFONO.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_TELEFONO,
       resetAt: Number(PropertiesService.getScriptProperties().getProperty('RESET_AT') || 0),
@@ -181,7 +186,8 @@ function timbratureMese_(anno, mese) {
     .map(r => ({ id: String(r[0]), dip: String(r[1]), cantiere: String(r[3]),
       start: r[4].getTime(), end: r[5] instanceof Date ? r[5].getTime() : null,
       extra: Number(r[COL_EXTRA - 1]) || 0, statoExtra: String(r[COL_STATO_EXTRA - 1] || ''),
-      posIn: String(r[COL_POS_IN - 1] || ''), posOut: String(r[COL_POS_OUT - 1] || '') }))
+      posIn: String(r[COL_POS_IN - 1] || ''), posOut: String(r[COL_POS_OUT - 1] || ''),
+      turno: String(r[COL_TURNO - 1] || turno_(r[4])) }))
     .sort((x, y) => y.start - x.start);
 }
 
@@ -301,7 +307,7 @@ function upsert_(s, user) {
   const posIn = mappa_(s.posIn) || (prima && prima[COL_POS_IN - 1]) || '';
   const posOut = s.end ? (mappa_(s.posOut) || (prima && prima[COL_POS_OUT - 1]) || '') : '';
   const row = [s.id, nome, giorno, s.site || '', start, end, ore, s.end ? 'Chiuso' : 'In corso', user && user.device || '', new Date(),
-    extraMin ? round2_(extraMin / 60) : '', extraMin ? motivo : '', extraMin ? nota : '', statoExtra, posIn, posOut];
+    extraMin ? round2_(extraMin / 60) : '', extraMin ? motivo : '', extraMin ? nota : '', statoExtra, posIn, posOut, turno_(start)];
   if (r) sh.getRange(r, 1, 1, row.length).setValues([row]);
   else { sh.appendRow(row); r = sh.getLastRow(); }
   sh.getRange(r, 3).setNumberFormat('dd/mm/yyyy');
@@ -338,6 +344,14 @@ function azzera_() {
   const vuoto = ss.getSheetByName('Foglio1');
   if (vuoto && vuoto.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(vuoto);
   PropertiesService.getScriptProperties().setProperty('RESET_AT', String(Date.now()));
+}
+
+// Fascia del turno dall'ora di entrata: prima delle 12 mattina, dalle 12 alle 21 pomeriggio
+function turno_(d) {
+  const h = d.getHours() + d.getMinutes() / 60;
+  if (h >= 4 && h < 12) return TURNI[0].nome;
+  if (h >= 12 && h < 21) return TURNI[1].nome;
+  return 'Fuori orario';
 }
 
 // Posizione GPS -> link a Google Maps (o il motivo per cui manca)
@@ -411,9 +425,11 @@ function creaRiepilogo_(anno, mese) {
   dati.forEach(r => {
     const dip = r[1], giorno = r[2], cantiere = r[3], stato = r[7];
     if (!(giorno instanceof Date) || giorno < da || giorno >= a) return;
-    const p = perDip[dip] || (perDip[dip] = { turni: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0 });
+    const p = perDip[dip] || (perDip[dip] = { turni: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0, mattine: 0, pomeriggi: 0 });
     if (stato !== 'Chiuso') { p.aperti++; return; }
     p.turni++;
+    const fascia = r[COL_TURNO - 1] || (r[4] instanceof Date ? turno_(r[4]) : '');
+    if (fascia === TURNI[0].nome) p.mattine++; else if (fascia === TURNI[1].nome) p.pomeriggi++;
     p.giorni.add(giorno.getTime());
     p.cantieri[cantiere] = (p.cantieri[cantiere] || 0) + 1;
     cantieri.add(cantiere);
@@ -427,21 +443,22 @@ function creaRiepilogo_(anno, mese) {
   const listaCantieri = Array.from(cantieri).sort();
   // Assenze approvate nel mese
   const ass = assenzeMese_(anno, mese);
-  Object.keys(ass).forEach(n => { if (!perDip[n]) perDip[n] = { turni: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0 }; });
+  Object.keys(ass).forEach(n => { if (!perDip[n]) perDip[n] = { turni: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0, mattine: 0, pomeriggi: 0 }; });
   const nomiTutti = Object.keys(perDip).sort();
   const intest = ['Dipendente', 'Giorni', 'Turni', 'Ore turni (' + ORE_TURNO + 'h)', 'Extra autorizzati', 'TOTALE ORE',
-    'Extra da autorizzare', 'Extra non autorizzati', 'Turni non chiusi', 'Giorni ferie', 'Ore permesso', 'Giorni malattia']
+    'Extra da autorizzare', 'Extra non autorizzati', 'Turni non chiusi', 'Giorni ferie', 'Ore permesso', 'Giorni malattia',
+    'Turni mattina', 'Turni pomeriggio']
     .concat(listaCantieri.map(c => c + ' (turni)'));
   const righe = nomiTutti.map(n => {
     const p = perDip[n], a = ass[n] || { ferie: 0, permesso: 0, malattia: 0 };
     const base = p.turni * ORE_TURNO;
     return [n, p.giorni.size, p.turni, base, round2_(p.extraOk), round2_(base + p.extraOk),
-      round2_(p.extraAttesa), round2_(p.extraNo), p.aperti, a.ferie, round2_(a.permesso), a.malattia]
+      round2_(p.extraAttesa), round2_(p.extraNo), p.aperti, a.ferie, round2_(a.permesso), a.malattia, p.mattine, p.pomeriggi]
       .concat(listaCantieri.map(c => p.cantieri[c] || 0));
   });
   const somma = i => round2_(righe.reduce((t, r) => t + (Number(r[i]) || 0), 0));
-  const totale = ['TOTALE', '', somma(2), somma(3), somma(4), somma(5), somma(6), somma(7), somma(8), somma(9), somma(10), somma(11)]
-    .concat(listaCantieri.map((c, i) => somma(12 + i)));
+  const totale = ['TOTALE', '', somma(2), somma(3), somma(4), somma(5), somma(6), somma(7), somma(8), somma(9), somma(10), somma(11), somma(12), somma(13)]
+    .concat(listaCantieri.map((c, i) => somma(14 + i)));
 
   const titolo = 'Riepilogo ' + anno + '-' + ('0' + (mese + 1)).slice(-2);
   const out = scriviTabella_(titolo, 'Riepilogo ore – ' + nomeMese, intest, righe, totale, [4, 5, 6, 7, 8, 11]);
@@ -513,13 +530,13 @@ function foglioAssenze_() {
   return sh;
 }
 
-// Giorni lavorativi (lunedì–sabato) tra due date incluse, eventualmente limitati a un mese
+// Giorni lavorativi (lunedì–venerdì) tra due date incluse, eventualmente limitati a un mese
 function giorniLavorativi_(dal, al, da, a) {
   let n = 0;
   const d = new Date(dal.getFullYear(), dal.getMonth(), dal.getDate());
   const fine = new Date(al.getFullYear(), al.getMonth(), al.getDate());
   for (; d <= fine; d.setDate(d.getDate() + 1)) {
-    if (d.getDay() === 0) continue;
+    if (d.getDay() === 0 || d.getDay() === 6) continue;
     if (da && (d < da || d >= a)) continue;
     n++;
   }
