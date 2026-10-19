@@ -1,5 +1,5 @@
 // Cache per funzionare anche senza rete. Cambia VERSION a ogni aggiornamento.
-const VERSION = 'tc-7';
+const VERSION = 'tc-8';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'icon.svg', 'logo.png', 'manifest.webmanifest'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
@@ -11,7 +11,8 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    fetch(e.request).then(r => {
+    // no-cache: chiede sempre al server se c'è una versione nuova (GitHub tiene i file in cache 10 minuti).
+    fetch(e.request.mode === 'navigate' ? e.request : new Request(e.request, { cache: 'no-cache' })).then(r => {
       const copy = r.clone();
       caches.open(VERSION).then(c => c.put(e.request, copy));
       return r;
