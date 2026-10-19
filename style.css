@@ -203,3 +203,4 @@ dialog h3 { padding-right: 40px; }
 .pill.no { background: #fee2e2; color: #991b1b; }
 .pill.wait { background: #fef3c7; color: #92400e; }
 label[hidden] { display: none !important; }
+.status .gps { font-size: 14px; }

@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 21;
+const APP_VERSION = 22;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -65,6 +65,9 @@ const toLocalInput = t => { const d = new Date(t); return `${d.getFullYear()}-${
 
 // ---------- Timbrature ----------
 // Posizione del telefono al momento della timbratura (se l'operatore dà il permesso)
+const posLabel = p => !p ? '📍 Rilevo la posizione…'
+  : p.errore ? `📍 Posizione non disponibile (${esc(p.errore)}). Controlla che la localizzazione sia attiva.`
+  : `📍 Posizione registrata ✓ (±${Math.round(p.acc || 0)} m)`;
 function getPos() {
   return new Promise(resolve => {
     if (!navigator.geolocation) return resolve({ errore: 'non supportata' });
@@ -84,6 +87,7 @@ function clockIn(siteId) {
     if (db.active && db.active.id === id) {
       db.active.posIn = pos;
       enqueueUpsert(Object.assign({}, db.active, { end: null }));
+      toast(pos.errore ? 'Posizione non disponibile' : 'Posizione registrata ✓');
     } else {
       const s = db.shifts.find(x => x.id === id);
       if (!s) return;
@@ -132,6 +136,7 @@ function render() {
       <div class="timer" id="timer"></div>
       <div class="bar"><span id="bar"></span></div>
       <p id="left"></p>
+      <p class="gps">${posLabel(db.active.posIn)}</p>
       <p>${esc(fasciaLabel(db.active.start))} · entrata alle ${fmtTime(db.active.start)} · fine prevista alle ${fmtTime(db.active.start + cfg().oreTurno * 3600000)}</p>
       <button class="btn big danger" id="btnOut">Timbra uscita</button>`;
     const tick = () => {
