@@ -25,8 +25,12 @@ function load() {
     user: null,
   };
 }
+// Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
+// Le operazioni del responsabile sono protette dalla password verificata dallo script.
+const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
+db.endpoint = db.endpoint || DEFAULT_ENDPOINT;
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('Impossibile salvare su questo telefono'); }
   render();
@@ -469,7 +473,7 @@ async function flush() {
     const out = await res.json();
     if (out.ok) {
       const done = new Set(out.done);
-      db = Object.assign(load(), { queue: (load().queue || []).filter(o => !done.has(o.opId)) });
+      db = Object.assign(load(), { endpoint: db.endpoint, queue: (load().queue || []).filter(o => !done.has(o.opId)) });
       try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { /* */ }
       if (db.queue.length) setTimeout(flush, 500);
     }
@@ -777,5 +781,5 @@ if (db.user) afterProfile(); else editProfile(afterProfile);
 window.addEventListener('online', () => { flush(); syncSites(); });
 syncSites();
 setInterval(flush, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); db.queue = db.queue || []; render(); flush(); syncSites(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); db.queue = db.queue || []; db.endpoint = db.endpoint || DEFAULT_ENDPOINT; render(); flush(); syncSites(); } });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
