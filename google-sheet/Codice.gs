@@ -5,11 +5,24 @@
  * Unica cosa da modificare: EMAIL_RESPONSABILE qui sotto.
  */
 
+// ID del Google Sheet: la parte dell'indirizzo tra /d/ e /edit.
+const ID_FOGLIO = 'INSERISCI_ID_FOGLIO';
+
 // Chi riceve il riepilogo a inizio mese (più indirizzi separati da virgola).
 const EMAIL_RESPONSABILE = 'responsabile@esempio.it';
 
 const FOGLIO_TIMBRATURE = 'Timbrature';
 const INTESTAZIONE = ['ID', 'Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Ore', 'Stato', 'Telefono', 'Aggiornato'];
+
+function ss_() { return SpreadsheetApp.openById(ID_FOGLIO); }
+
+/** Esegui UNA volta dall'editor: crea il menu nel foglio e l'invio automatico il 1° del mese. */
+function configura() {
+  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('onOpen').forSpreadsheet(ID_FOGLIO).onOpen().create();
+  ScriptApp.newTrigger('inviaRiepilogoMeseScorso').timeBased().onMonthDay(1).atHour(7).create();
+  foglio_();
+}
 
 // ---------- Ricezione dall'app ----------
 
@@ -43,7 +56,7 @@ function json_(obj) {
 }
 
 function foglio_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = ss_();
   let sh = ss.getSheetByName(FOGLIO_TIMBRATURE);
   if (!sh) {
     sh = ss.insertSheet(FOGLIO_TIMBRATURE, 0);
@@ -89,6 +102,9 @@ function remove_(id) {
 // ---------- Riepilogo mensile ----------
 
 function onOpen() {
+  try { menu_(); } catch (e) { /* il menu compare solo se il foglio lo consente */ }
+}
+function menu_() {
   SpreadsheetApp.getUi().createMenu('Timbra Cantieri')
     .addItem('Riepilogo mese in corso', 'riepilogoMeseCorrente')
     .addItem('Riepilogo mese scorso', 'riepilogoMeseScorso')
@@ -110,7 +126,7 @@ function riepilogoMeseScorso() {
 
 /** Crea (o ricrea) il foglio "Riepilogo AAAA-MM". Restituisce i dati per l'email. */
 function creaRiepilogo_(anno, mese) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = ss_();
   const sh = foglio_();
   const da = new Date(anno, mese, 1), a = new Date(anno, mese + 1, 1);
   const nomeMese = Utilities.formatDate(da, Session.getScriptTimeZone(), 'MMMM yyyy');
@@ -151,7 +167,7 @@ function creaRiepilogo_(anno, mese) {
   out.getRange(4, intest.length, righe.length + 1, 1).setNumberFormat('0');
   out.setFrozenRows(3);
   out.autoResizeColumns(1, intest.length);
-  ss.setActiveSheet(out);
+  
   return { titolo, nomeMese, intest, righe, totale, sheetId: out.getSheetId() };
 }
 
@@ -161,7 +177,7 @@ function inviaRiepilogoMeseScorso() {
   const d = new Date();
   d.setDate(1); d.setMonth(d.getMonth() - 1);
   const r = creaRiepilogo_(d.getFullYear(), d.getMonth());
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = ss_();
   const link = ss.getUrl() + '#gid=' + r.sheetId;
 
   const td = 'style="border:1px solid #ddd;padding:6px 10px"';
@@ -187,9 +203,6 @@ function inviaRiepilogoMeseScorso() {
 
 /** Esegui una volta: invia il riepilogo ogni 1° del mese alle 7. */
 function attivaInvioAutomatico() {
-  ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'inviaRiepilogoMeseScorso')
-    .forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('inviaRiepilogoMeseScorso').timeBased().onMonthDay(1).atHour(7).create();
-  SpreadsheetApp.getActiveSpreadsheet().toast('Invio automatico attivo: il 1° di ogni mese alle 7.');
+  configura();
+  ss_().toast('Invio automatico attivo: il 1° di ogni mese alle 7.');
 }
