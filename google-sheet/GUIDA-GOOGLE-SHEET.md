@@ -40,3 +40,18 @@ Nell'editor dello script scegli la funzione ed eseguila:
 Salva. Se hai toccato la parte che riceve le timbrature (`doPost`):
 **Esegui il deployment → Gestisci deployment → ✏️ → Versione: Nuova versione → Esegui il deployment**.
 L'URL resta lo stesso.
+
+## Aggiornamento: avvisi immediati e programma della settimana
+Il file `Codice.gs` qui contiene due parti nuove: **avvisi immediati** al responsabile
+(fuori sede, modalità prova, extra e ferie da approvare, uscita dimenticata dopo 6 ore)
+e il **programma della settimana** (squadre per giorno e turno, compilato dall'app).
+
+Per installarle nello script già in uso, senza perdere ID del foglio, nome e telefono del responsabile:
+1. Nell'editor dello script copia da qui **in fondo al file** le sezioni
+   "Avvisi immediati al responsabile" e "Programma della settimana".
+2. In `doPost`, dopo il blocco `ops.forEach(...)`, aggiungi
+   `try { avvisiImmediati(); } catch (err) {}`.
+3. In `doGet`, come prima riga: `if (e && e.parameter && e.parameter.azione === 'programma') return json_(programmaPubblico_(e));`
+4. In `admin_`, nello `switch`, aggiungi i tre `case` `'programma'`, `'salvaprogramma'` e `'operatori'` (copiali da qui).
+5. Salva, poi **Gestisci deployment → ✏️ → Nuova versione → Esegui il deployment**.
+6. Esegui una volta **attivaAvvisiImmediati**.

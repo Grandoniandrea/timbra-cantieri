@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 32;
+const APP_VERSION = 33;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -208,6 +208,8 @@ function render() {
   const n = db.shifts.filter(s => s.start >= startOfMonth()).length;
   $('#statMonthN').textContent = `${n} turn${n === 1 ? 'o' : 'i'} conclus${n === 1 ? 'o' : 'i'}`;
 
+  renderPlan();
+
   // Cantieri
   const managed = !!db.endpoint;
   $('#btnAddSite').hidden = managed;
@@ -216,11 +218,12 @@ function render() {
     ? 'Le timbrature vengono inviate al registro aziendale.'
     : 'I dati restano su questo telefono. Fai un backup ogni tanto dal menu ⋯') + ` · versione ${APP_VERSION}`;
   const shown = db.sites.filter(s => !s.hidden);
+  const todayPlanned = new Set(myPlan().filter(p => p.data === isoDay(new Date())).map(p => p.cantiere));
   $('#sites').innerHTML = shown.length ? shown.map(s => {
     const here = db.active && db.active.siteId === s.id;
     return `<li>
       <span class="dot" style="background:${esc(s.color)}"></span>
-      <div class="grow"><b>${esc(s.name)}</b><span>${here ? 'In corso' : 'Pronto'}</span></div>
+      <div class="grow"><b>${esc(s.name)}</b><span>${here ? 'In corso' : todayPlanned.has(s.name) ? '📅 In programma oggi' : 'Pronto'}</span></div>
       ${managed ? '' : `<button class="icon-btn" data-edit-site="${s.id}" aria-label="Modifica ${esc(s.name)}">✎</button>`}
       <button class="btn" data-in="${s.id}" ${db.active ? 'disabled' : ''}>Entrata</button>
     </li>`;
@@ -508,6 +511,197 @@ function toast(msg, undo) {
   if (undo) t.querySelector('button').onclick = () => { undo(); t.hidden = true; if (dlg.open) dlg.close(); };
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, undo ? UNDO_MS : 3000);
+}
+
+// ---------- Programma della settimana ----------
+// Il responsabile assegna le squadre (cantiere + operatori) per giorno e turno; gli operatori vedono i propri turni.
+// Chi è in due turni lo stesso giorno fa il doppio turno (in rosso nel programma).
+const PLAN_TURNI = [{ nome: 'Mattina', orario: '06–11' }, { nome: 'Pomeriggio', orario: '13–18' }];
+const isoDay = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const dayFromIso = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const addDays = (s, n) => { const d = dayFromIso(s); d.setDate(d.getDate() + n); return isoDay(d); };
+const mondayOf = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return isoDay(x); };
+const sameName = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+const dayLabel = s => dayFromIso(s).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'short' });
+const turnoInfo = n => PLAN_TURNI.find(t => t.nome === n) || { nome: n, orario: '' };
+function doppi(squadre) {
+  // "data|nome" → numero di turni diversi
+  const m = {};
+  squadre.forEach(s => s.operatori.forEach(o => {
+    const k = s.data + '|' + o.toLowerCase();
+    (m[k] = m[k] || new Set()).add(s.turno);
+  }));
+  return (data, nome) => (m[data + '|' + String(nome).toLowerCase()] || new Set()).size > 1;
+}
+
+// Operatore: scarica il programma dei prossimi giorni
+async function syncPlan() {
+  if (!db.endpoint || navigator.onLine === false) return;
+  try {
+    const res = await withTimeout(fetch(`${db.endpoint}?azione=programma`), 20000);
+    const out = await res.json();
+    if (!out.ok || !Array.isArray(out.squadre)) return;
+    const next = { squadre: out.squadre, at: Date.now() };
+    if (JSON.stringify(next.squadre) !== JSON.stringify((db.plan || {}).squadre)) { db.plan = next; save(); render(); }
+  } catch (e) { /* offline o script da aggiornare: resta il programma già scaricato */ }
+}
+function myPlan() {
+  if (!db.plan || !db.user) return [];
+  const me = fullName();
+  const oggi = isoDay(new Date());
+  return db.plan.squadre.filter(s => s.data >= oggi && s.operatori.some(o => sameName(o, me)));
+}
+function renderPlan() {
+  const box = $('#plan');
+  if (!box) return;
+  const mine = myPlan();
+  if (!db.plan || !db.user) { box.hidden = true; return; }
+  box.hidden = false;
+  const me = fullName();
+  const isD = doppi(db.plan.squadre);
+  const oggi = isoDay(new Date()), domani = addDays(oggi, 1);
+  const when = d => d === oggi ? 'Oggi' : d === domani ? 'Domani' : dayLabel(d);
+  const rows = mine.slice(0, 4).map(s => {
+    const t = turnoInfo(s.turno);
+    const altri = s.operatori.filter(o => !sameName(o, me));
+    const site = db.sites.find(x => x.name === s.cantiere);
+    return `<li>
+      <span class="dot" style="background:${esc(site ? site.color : 'var(--brand)')}"></span>
+      <div class="grow"><b>${esc(when(s.data))} · ${esc(t.nome)} ${esc(t.orario)}</b>
+        <span>${esc(s.cantiere)}${altri.length ? ' · con ' + esc(altri.join(', ')) : ''}${s.nota ? ' · ' + esc(s.nota) : ''}</span></div>
+      ${isD(s.data, me) ? '<span class="pill doppio">Doppio</span>' : ''}
+    </li>`;
+  });
+  box.innerHTML = `<div class="sec-head"><div><small>IL TUO PROGRAMMA</small><h2>Prossimi turni</h2></div></div>
+    <ul class="list">${rows.length ? rows.join('') : '<li class="empty">Nessun turno in programma per te nei prossimi giorni.</li>'}</ul>`;
+}
+
+// Responsabile: programma della settimana
+let planWeek = null, planSquads = [], planPeople = [], planSites = [], planDirty = false;
+function adminPlan(week) {
+  planWeek = week || planWeek || mondayOf(new Date());
+  call('programma', { da: planWeek, a: addDays(planWeek, 6) }, 'Carico il programma', out => {
+    if (!Array.isArray(out.squadre)) return fail('Per usare il programma va aggiornato lo script Google (guida nel repository).');
+    planSquads = out.squadre; planPeople = out.operatori || []; planSites = (out.cantieri || []).filter(c => c.attivo !== false);
+    planDirty = false;
+    planView();
+  });
+}
+function planView() {
+  const isD = doppi(planSquads);
+  const fine = addDays(planWeek, 6);
+  const titolo = `${dayFromIso(planWeek).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })} – ${dayFromIso(fine).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}`;
+  const days = [0, 1, 2, 3, 4, 5, 6].map(i => addDays(planWeek, i));
+  const color = n => ((planSites.find(c => c.nome === n) || {}).colore) || 'var(--brand)';
+  openDialog(`
+    <h3>📅 Programma</h3>
+    <div class="plan-nav">
+      <button class="btn ghost" value="prev" formnovalidate aria-label="Settimana prima">◀</button>
+      <b>${esc(titolo)}</b>
+      <button class="btn ghost" value="next" formnovalidate aria-label="Settimana dopo">▶</button>
+    </div>
+    ${planDirty ? '<p class="plan-dirty">Modifiche non salvate</p>' : ''}
+    <div class="plan-days">${days.map(d => `
+      <div class="plan-day">
+        <div class="plan-day-h">${esc(dayLabel(d))}</div>
+        ${PLAN_TURNI.map(t => {
+          const sq = planSquads.filter(s => s.data === d && s.turno === t.nome);
+          return `<div class="plan-turno"><small>${t.nome} ${t.orario}</small>
+            ${sq.map(s => `<button class="plan-sq" value="edit:${esc(s.id)}" formnovalidate>
+              <span class="dot" style="background:${esc(color(s.cantiere))}"></span>
+              <span class="grow"><b>${esc(s.cantiere)}</b> ${s.operatori.map(o => `<span class="${isD(d, o) ? 'nm doppio' : 'nm'}">${esc(o)}</span>`).join(' ')}</span>
+            </button>`).join('')}
+            <button class="plan-add" value="add:${d}:${t.nome}" formnovalidate>+ Squadra</button></div>`;
+        }).join('')}
+      </div>`).join('')}</div>
+    <p class="note"><span class="nm doppio">Nome</span> = doppio turno quel giorno.</p>
+    <div class="menu">
+      <button class="btn" value="save">💾 Salva il programma</button>
+      <button class="btn ghost" value="copy" formnovalidate>📋 Copia la settimana prima</button>
+      <button class="btn ghost" value="people" formnovalidate>👥 Operatori</button>
+      <button class="btn ghost" value="back" formnovalidate>Indietro</button>
+    </div>`, a => {
+    if (a === 'prev' || a === 'next') {
+      if (planDirty && !confirm('Ci sono modifiche non salvate. Cambiare settimana e perderle?')) return setTimeout(planView, 50);
+      return setTimeout(() => adminPlan(addDays(planWeek, a === 'prev' ? -7 : 7)), 50);
+    }
+    if (a === 'save') return setTimeout(() => call('salvaprogramma', { da: planWeek, a: addDays(planWeek, 6), squadre: planSquads }, 'Salvo il programma', out => {
+      planSquads = out.squadre || planSquads; planDirty = false; toast('Programma salvato ✓'); planView();
+    }), 50);
+    if (a === 'copy') return setTimeout(planCopyPrev, 50);
+    if (a === 'people') return setTimeout(planPeopleEdit, 50);
+    if (a === 'back') {
+      if (planDirty && !confirm('Ci sono modifiche non salvate. Uscire e perderle?')) return setTimeout(planView, 50);
+      return setTimeout(adminHome, 50);
+    }
+    if (a.startsWith('add:')) { const [, d, t] = a.split(':'); return setTimeout(() => planSquadEdit(null, d, t), 50); }
+    if (a.startsWith('edit:')) return setTimeout(() => planSquadEdit(a.slice(5)), 50);
+  });
+}
+function planSquadEdit(id, data, turno) {
+  const s = id ? planSquads.find(x => x.id === id) : { id: uid(), data, turno, cantiere: '', operatori: [], nota: '' };
+  if (!s) return planView();
+  const names = planSites.map(c => c.nome);
+  const def = s.cantiere || (names.includes('PISA') ? 'PISA' : names[0] || '');
+  // Chi è già in un'altra squadra nello stesso giorno: stesso turno (occupato) o altro turno (diventa doppio)
+  const altrove = (nome, stessoTurno) => planSquads.some(x => x.id !== s.id && x.data === s.data && (x.turno === s.turno) === stessoTurno && x.operatori.some(o => sameName(o, nome)));
+  const people = planPeople.filter(p => p.attivo !== false || s.operatori.some(o => sameName(o, p.nome)));
+  const t = turnoInfo(s.turno);
+  openDialog(`
+    <h3>${id ? 'Modifica squadra' : 'Nuova squadra'}</h3>
+    <p class="note">${esc(dayLabel(s.data))} · ${esc(t.nome)} ${esc(t.orario)}</p>
+    <label>Cantiere<select name="cantiere">${names.concat(s.cantiere && !names.includes(s.cantiere) ? [s.cantiere] : []).map(n => `<option ${n === def ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+    <div><b>Operatori</b>
+      <div class="plan-people">${people.length ? people.map(p => {
+        const occ = altrove(p.nome, true), dop = altrove(p.nome, false);
+        return `<label class="pp"><input type="checkbox" name="op" value="${esc(p.nome)}" ${s.operatori.some(o => sameName(o, p.nome)) ? 'checked' : ''}>
+          <span>${esc(p.nome)}${occ ? ' <em>già in un\'altra squadra</em>' : dop ? ' <em class="dop">sarebbe doppio turno</em>' : ''}</span></label>`;
+      }).join('') : '<p class="note">Nessun operatore: aggiungili da 👥 Operatori.</p>'}</div>
+    </div>
+    <label>Nota (facoltativa)<input name="nota" maxlength="200" value="${esc(s.nota || '')}" placeholder="es. corso, mezzo, indirizzo"></label>
+    <div class="row">
+      ${id ? '<button class="btn ghost danger-text" value="del" formnovalidate>Elimina</button>' : ''}
+      <button class="btn ghost" value="cancel" formnovalidate>Annulla</button>
+      <button class="btn" value="ok">OK</button>
+    </div>`, (a, fd) => {
+    if (a === 'cancel') return setTimeout(planView, 50);
+    if (a === 'del') { planSquads = planSquads.filter(x => x.id !== s.id); planDirty = true; return setTimeout(planView, 50); }
+    const ops = fd.getAll('op').map(String);
+    if (!ops.length) { alert('Scegli almeno un operatore.'); return false; }
+    Object.assign(s, { cantiere: String(fd.get('cantiere') || def), operatori: ops, nota: String(fd.get('nota') || '').trim() });
+    if (!id) planSquads.push(s);
+    planDirty = true;
+    setTimeout(planView, 50);
+  });
+}
+function planCopyPrev() {
+  const prev = addDays(planWeek, -7);
+  call('programma', { da: prev, a: addDays(prev, 6) }, 'Copio la settimana prima', out => {
+    const src = (out.squadre || []);
+    if (!src.length) { toast('La settimana prima è vuota'); return planView(); }
+    if (planSquads.length && !confirm('Sostituire il programma di questa settimana con quello della settimana prima?')) return planView();
+    planSquads = src.map(s => Object.assign({}, s, { id: uid(), data: addDays(s.data, 7) }));
+    planDirty = true;
+    planView();
+  });
+}
+function planPeopleEdit() {
+  openDialog(`
+    <h3>👥 Operatori</h3>
+    <p class="note">Chi è spuntato compare nel programma. Chi ha già timbrato c'è già.</p>
+    <div class="plan-people">${planPeople.map((p, i) => `<label class="pp"><input type="checkbox" name="on" value="${i}" ${p.attivo !== false ? 'checked' : ''}><span>${esc(p.nome)}</span></label>`).join('')}</div>
+    <label>Aggiungi operatore (nome e cognome)<input name="nuovo" maxlength="60" placeholder="es. Mario Rossi" autocomplete="off"></label>
+    <div class="row"><button class="btn ghost" value="cancel" formnovalidate>Indietro</button><button class="btn" value="ok">Salva</button></div>`, (a, fd) => {
+    if (a === 'cancel') return setTimeout(planView, 50);
+    const on = new Set(fd.getAll('on').map(Number));
+    const lista = planPeople.map((p, i) => ({ nome: p.nome, attivo: on.has(i) }));
+    const cap = v => String(v || '').trim().replace(/\s+/g, ' ').replace(/(^|[\s'-])\S/g, c => c.toUpperCase());
+    const nuovo = cap(fd.get('nuovo'));
+    if (nuovo && !lista.some(p => sameName(p.nome, nuovo))) lista.push({ nome: nuovo, attivo: true });
+    setTimeout(() => call('operatori', { operatori: lista }, 'Salvo gli operatori', out => {
+      planPeople = out.operatori || lista; toast('Operatori salvati ✓'); planView();
+    }), 50);
+  });
 }
 
 // ---------- Stima busta paga (solo su questo telefono) ----------
@@ -987,6 +1181,7 @@ function adminHome() {
     <div class="menu">
       <button class="btn ghost" value="sites">🏗️ Cantieri: aggiungi, togli, rinomina</button>
       <button class="btn ghost" value="report">📊 Report del mese: PDF, stampa, email, condividi</button>
+      <button class="btn ghost" value="plan">📅 Programma della settimana</button>
       <button class="btn ghost" value="stats">📈 Statistiche ore per cantiere</button>
       <button class="btn ghost" value="extra">⏱️ Ore extra da autorizzare${adminExtraCount ? ` <span class="badge">${adminExtraCount}</span>` : ''}</button>
       <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia${adminAbsCount ? ` <span class="badge">${adminAbsCount}</span>` : ''}</button>
@@ -1003,6 +1198,7 @@ function adminHome() {
       sites: () => call('leggi', null, 'Carico i cantieri', out => adminSites(out.cantieri)),
       report: adminReportPick,
       stats: adminStatsPick,
+      plan: () => adminPlan(),
       shifts: adminShiftsPick,
       extra: () => call('extra', null, 'Carico le richieste', out => adminExtra(out.extra)),
       assenze: () => call('assenze', null, 'Carico ferie e permessi', out => adminAbsences(out.assenze)),
@@ -1419,8 +1615,9 @@ function handleConnect() {
 render();
 const afterProfile = () => { if (!handleConnect()) handleNfc(); };
 if (db.user) afterProfile(); else editProfile(afterProfile);
-window.addEventListener('online', () => { flush(); syncSites(); });
+window.addEventListener('online', () => { flush(); syncSites(); syncPlan(); });
 syncSites();
+syncPlan();
 setInterval(flush, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); db.queue = db.queue || []; db.endpoint = db.endpoint || DEFAULT_ENDPOINT; render(); flush(); syncSites(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); db.queue = db.queue || []; db.endpoint = db.endpoint || DEFAULT_ENDPOINT; render(); flush(); syncSites(); syncPlan(); } });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

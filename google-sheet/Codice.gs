@@ -69,6 +69,7 @@ function doPost(e) {
       else if (op.type === 'assenza') salvaAssenza_(op.assenza, body.user);
       ok.push(op.opId);
     });
+    try { avvisiImmediati(); } catch (err) { /* l'avviso non deve bloccare la timbratura */ }
     return json_({ ok: true, done: ok });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
@@ -79,6 +80,7 @@ function doPost(e) {
 
 // Apri l'URL della web app nel browser per verificare che funzioni.
 function doGet(e) {
+  if (e && e.parameter && e.parameter.azione === 'programma') return json_(programmaPubblico_(e));
   if (e && e.parameter && e.parameter.azione === 'assenze') {
     return json_({ ok: true, assenze: assenze_().filter(a => a.device && a.device === String(e.parameter.device || '')) });
   }
@@ -159,6 +161,10 @@ function admin_(req) {
     case 'modifica': modificaTimbratura_(req.t); return { ok: true };
     case 'elimina': remove_(req.id); return { ok: true };
     case 'extra': return { ok: true, extra: extraInAttesa_() };
+    case 'programma': return { ok: true, squadre: programma_(req.da, req.a), operatori: operatori_(), cantieri: tuttiCantieri_() };
+    case 'salvaprogramma': salvaProgramma_(req.da, req.a, req.squadre);
+      return { ok: true, squadre: programma_(req.da, req.a), operatori: operatori_(), cantieri: tuttiCantieri_() };
+    case 'operatori': salvaOperatori_(req.operatori); return { ok: true, operatori: operatori_() };
     case 'azzera': azzera_(); return { ok: true };
     case 'sede': impostaSede_(req.sede); return { ok: true, sede: sede_() };
     case 'assenze': return { ok: true, assenze: assenze_() };
@@ -713,4 +719,216 @@ function inviaRiepilogo_(anno, mese) {
 function attivaInvioAutomatico() {
   configura();
   ss_().toast('Invio automatico attivo: il 1° di ogni mese alle 7.');
+}
+
+// ---------- Avvisi immediati al responsabile ----------
+// Un'email per ogni problema, appena succede. Solo l'operatore che ha il problema, non tutti.
+//   - timbratura fuori sede            → subito
+//   - timbratura in modalità prova     → subito
+//   - ore extra da autorizzare         → subito (guasto, foratura, incidente…)
+//   - ferie / permesso / malattia      → subito
+//   - uscita dimenticata               → dopo ORE_USCITA_DIMENTICATA ore dall'entrata (controllo ogni ora)
+// Ogni problema viene avvisato UNA volta sola.
+// Attivazione: esegui UNA volta la funzione attivaAvvisiImmediati dall'editor.
+
+// Dopo quante ore dall'entrata, senza uscita, l'uscita si considera dimenticata.
+const ORE_USCITA_DIMENTICATA = ORE_TURNO + 1;
+// Si guardano solo le timbrature degli ultimi giorni.
+const GIORNI_AVVISI = 7;
+
+/** Esegui UNA volta: controllo ogni ora. I problemi già presenti adesso non vengono rimandati. */
+function attivaAvvisiImmediati() {
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'avvisiImmediati')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('avvisiImmediati').timeBased().everyHours(1).create();
+  avvisiImmediati(true);
+  ss_().toast('Avvisi immediati attivi.');
+}
+
+function avvisiImmediati(soloSegna) {
+  const props = PropertiesService.getScriptProperties();
+  let visti = [];
+  try { visti = JSON.parse(props.getProperty('AVVISI_INVIATI') || '[]'); } catch (e) { visti = []; }
+  const giaVisto = new Set(visti);
+  const tz = Session.getScriptTimeZone();
+  const f = d => Utilities.formatDate(d, tz, 'dd/MM HH:mm');
+  const ora = Date.now();
+  const limite = ora - GIORNI_AVVISI * 864e5;
+  const nuovi = [];
+  const aggiungi = (chiave, titolo, dip, testo) => {
+    if (giaVisto.has(chiave)) return;
+    giaVisto.add(chiave);
+    visti.push(chiave);
+    nuovi.push({ titolo: titolo, dip: dip, testo: testo });
+  };
+
+  // Timbrature
+  const sh = foglio_();
+  const dati = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, INTESTAZIONE.length).getValues() : [];
+  dati.forEach(r => {
+    const id = String(r[0] || '');
+    const ent = r[4] instanceof Date ? r[4] : null;
+    if (!id || !ent || ent.getTime() < limite) return;
+    const dip = String(r[1]), cant = String(r[3]);
+    const sede = String(r[COL_SEDE - 1] || '');
+    if (sede.indexOf('FUORI SEDE') === 0) {
+      aggiungi(id + '|f', 'Timbratura fuori sede', dip, cant + ' · entrata ' + f(ent) + ' · ' + sede);
+    }
+    if (sede.indexOf('PROVA') === 0) {
+      aggiungi(id + '|p', 'Timbratura in modalità prova', dip, cant + ' · entrata ' + f(ent));
+    }
+    if (r[7] === 'In corso' && ora - ent.getTime() > ORE_USCITA_DIMENTICATA * 36e5) {
+      aggiungi(id + '|u', 'Uscita non timbrata', dip, cant + ' · entrata ' + f(ent) + ' · nessuna uscita dopo ' + ORE_USCITA_DIMENTICATA + ' ore');
+    }
+    if (r[COL_STATO_EXTRA - 1] === EXTRA_ATTESA) {
+      const extra = String(r[COL_EXTRA - 1]).replace('.', ',');
+      const motivo = String(r[COL_MOTIVO - 1] || '') + (r[COL_NOTA - 1] ? ' – ' + r[COL_NOTA - 1] : '');
+      const uscita = r[5] instanceof Date ? ' → ' + Utilities.formatDate(r[5], tz, 'HH:mm') : '';
+      aggiungi(id + '|e' + r[COL_EXTRA - 1], 'Ore extra da autorizzare', dip,
+        cant + ' · ' + f(ent) + uscita + ' · +' + extra + ' h · ' + (motivo || 'motivo non indicato'));
+    }
+  });
+
+  // Ferie, permessi, malattia in attesa
+  assenze_().filter(a => a.stato === ASS_ATTESA).forEach(a => {
+    aggiungi(a.id + '|a', a.tipo + ' da approvare', a.dip,
+      'dal ' + a.dal + (a.al && a.al !== a.dal ? ' al ' + a.al : '') + (a.ore ? ' · ' + a.ore + ' h' : '') + (a.nota ? ' · ' + a.nota : ''));
+  });
+
+  if (visti.length > 250) visti = visti.slice(-250);
+  props.setProperty('AVVISI_INVIATI', JSON.stringify(visti));
+  if (soloSegna === true || !nuovi.length) return;
+
+  const oggetto = nuovi.length === 1
+    ? 'GE3CO – ' + nuovi[0].titolo + ': ' + nuovi[0].dip
+    : 'GE3CO – ' + nuovi.length + ' avvisi';
+  const html = nuovi.map(x => '<p><b>' + x.titolo + '</b><br>' + x.dip + '<br>' + x.testo + '</p>').join('') +
+    '<p>Si sistema dall\'app: tieni premuto il logo GE3CO → Area responsabile.</p>';
+  MailApp.sendEmail({
+    to: EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail(),
+    subject: oggetto,
+    htmlBody: html,
+  });
+}
+
+// ---------- Programma della settimana (squadre per giorno e turno) ----------
+// Il responsabile lo compila dall'app (Area responsabile → Programma); gli operatori vedono i loro turni.
+// Scheda "Programma": una riga per squadra. Scheda "Operatori": elenco delle persone da scegliere.
+
+const FOGLIO_PROGRAMMA = 'Programma';
+const INTEST_PROGRAMMA = ['ID', 'Data', 'Turno', 'Cantiere', 'Operatori', 'Nota'];
+const FOGLIO_OPERATORI = 'Operatori';
+
+function foglioProgramma_() {
+  const ss = ss_();
+  let sh = ss.getSheetByName(FOGLIO_PROGRAMMA);
+  if (!sh) {
+    sh = ss.insertSheet(FOGLIO_PROGRAMMA);
+    sh.appendRow(INTEST_PROGRAMMA);
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, INTEST_PROGRAMMA.length).setFontWeight('bold').setBackground('#e7f2ea');
+    sh.hideColumns(1);
+    sh.getRange('B:B').setNumberFormat('ddd dd/mm/yyyy');
+    sh.setColumnWidth(5, 320);
+  }
+  return sh;
+}
+
+function foglioOperatori_() {
+  const ss = ss_();
+  let sh = ss.getSheetByName(FOGLIO_OPERATORI);
+  if (!sh) {
+    sh = ss.insertSheet(FOGLIO_OPERATORI);
+    sh.getRange(1, 1, 1, 2).setValues([['Operatore', 'Attivo']]).setFontWeight('bold').setBackground('#e7f2ea');
+    sh.setFrozenRows(1);
+    sh.setColumnWidth(1, 240);
+    const nomi = nomiDaTimbrature_();
+    if (nomi.length) sh.getRange(2, 1, nomi.length, 2).setValues(nomi.map(n => [n, 'SI']));
+  }
+  return sh;
+}
+
+function nomiDaTimbrature_() {
+  const sh = foglio_();
+  if (sh.getLastRow() < 2) return [];
+  const visti = {};
+  sh.getRange(2, 2, sh.getLastRow() - 1, 1).getValues().forEach(r => {
+    const n = String(r[0] || '').trim();
+    if (n && n !== 'Sconosciuto' && n !== 'Prova Dipendente') visti[n] = true;
+  });
+  return Object.keys(visti).sort();
+}
+
+/** Operatori da scegliere: quelli della scheda "Operatori" più chi ha già timbrato. */
+function operatori_() {
+  const sh = foglioOperatori_();
+  const elenco = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues()
+    .filter(r => String(r[0]).trim())
+    .map(r => ({ nome: String(r[0]).trim(), attivo: String(r[1]).trim().toUpperCase() !== 'NO' })) : [];
+  const noti = {};
+  elenco.forEach(o => { noti[o.nome.toLowerCase()] = true; });
+  nomiDaTimbrature_().forEach(n => { if (!noti[n.toLowerCase()]) elenco.push({ nome: n, attivo: true }); });
+  return elenco.sort((a, b) => a.nome.localeCompare(b.nome));
+}
+
+function salvaOperatori_(lista) {
+  if (!Array.isArray(lista)) return;
+  const visti = {};
+  const righe = [];
+  lista.forEach(o => {
+    const nome = String(o && o.nome || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    if (!nome || visti[nome.toLowerCase()]) return;
+    visti[nome.toLowerCase()] = true;
+    righe.push([nome, o.attivo === false ? 'NO' : 'SI']);
+  });
+  const sh = foglioOperatori_();
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 2).clearContent();
+  if (righe.length) sh.getRange(2, 1, righe.length, 2).setValues(righe);
+}
+
+function dataIso_(d) { return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd'); }
+function daIso_(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+}
+
+/** Squadre tra due date comprese (stringhe AAAA-MM-GG). */
+function programma_(da, a) {
+  const sh = foglioProgramma_();
+  if (sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, INTEST_PROGRAMMA.length).getValues()
+    .filter(r => r[1] instanceof Date)
+    .map(r => ({ id: String(r[0]), data: dataIso_(r[1]), turno: String(r[2]), cantiere: String(r[3]),
+      operatori: String(r[4] || '').split(',').map(x => x.trim()).filter(Boolean), nota: String(r[5] || '') }))
+    .filter(s => (!da || s.data >= da) && (!a || s.data <= a))
+    .sort((x, y) => (x.data + x.turno).localeCompare(y.data + y.turno));
+}
+
+/** Sostituisce tutte le squadre tra due date con quelle nuove. */
+function salvaProgramma_(da, a, squadre) {
+  if (!daIso_(da) || !daIso_(a) || !Array.isArray(squadre)) return;
+  const sh = foglioProgramma_();
+  const tutte = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, INTEST_PROGRAMMA.length).getValues() : [];
+  const resto = tutte.filter(r => !(r[1] instanceof Date) || dataIso_(r[1]) < da || dataIso_(r[1]) > a);
+  const nuove = squadre.map(s => {
+    const d = daIso_(s.data);
+    if (!d || s.data < da || s.data > a) return null;
+    const ops = (Array.isArray(s.operatori) ? s.operatori : []).map(x => String(x).trim()).filter(Boolean);
+    if (!ops.length) return null;
+    return [String(s.id || Utilities.getUuid()).slice(0, 40), d, String(s.turno || '').slice(0, 20),
+      String(s.cantiere || '').trim().toUpperCase().slice(0, 60), ops.join(', '), String(s.nota || '').slice(0, 200)];
+  }).filter(Boolean);
+  const righe = resto.concat(nuove).sort((x, y) => (x[1] - y[1]) || String(x[2]).localeCompare(String(y[2])));
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, INTEST_PROGRAMMA.length).clearContent();
+  if (righe.length) sh.getRange(2, 1, righe.length, INTEST_PROGRAMMA.length).setValues(righe);
+}
+
+/** Per gli operatori (senza password): le squadre dei prossimi giorni. */
+function programmaPubblico_(e) {
+  const oggi = new Date(); oggi.setHours(0, 0, 0, 0);
+  const fra = new Date(oggi.getTime() + 13 * 864e5);
+  const da = daIso_(e.parameter.da) ? e.parameter.da : dataIso_(oggi);
+  const a = daIso_(e.parameter.a) ? e.parameter.a : dataIso_(fra);
+  return { ok: true, squadre: programma_(da, a) };
 }
