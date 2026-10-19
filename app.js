@@ -835,6 +835,7 @@ function adminHome() {
     <div class="menu">
       <button class="btn ghost" value="sites">🏗️ Cantieri: aggiungi, togli, rinomina</button>
       <button class="btn ghost" value="report">📊 Report del mese: PDF, stampa, email, condividi</button>
+      <button class="btn ghost" value="stats">📈 Statistiche ore per cantiere</button>
       <button class="btn ghost" value="extra">⏱️ Ore extra da autorizzare${adminExtraCount ? ` <span class="badge">${adminExtraCount}</span>` : ''}</button>
       <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia${adminAbsCount ? ` <span class="badge">${adminAbsCount}</span>` : ''}</button>
       <button class="btn ghost" value="shifts">✏️ Modifica timbrature dei dipendenti</button>
@@ -849,6 +850,7 @@ function adminHome() {
     const go = {
       sites: () => call('leggi', null, 'Carico i cantieri', out => adminSites(out.cantieri)),
       report: adminReportPick,
+      stats: adminStatsPick,
       shifts: adminShiftsPick,
       extra: () => call('extra', null, 'Carico le richieste', out => adminExtra(out.extra)),
       assenze: () => call('assenze', null, 'Carico ferie e permessi', out => adminAbsences(out.assenze)),
@@ -1038,6 +1040,66 @@ function adminAbsences(list) {
 
 // --- Timbrature
 let adminShifts = null, adminSitesList = [];
+// ---------- Statistiche ore per cantiere (area responsabile) ----------
+// Ore contate come nel riepilogo: ogni turno chiuso vale oreTurno ore fisse + gli extra autorizzati.
+let statsShifts = [], statsSites = [];
+function adminStatsPick() {
+  openDialog(`
+    <h3>📈 Statistiche per cantiere</h3>
+    ${monthInput()}
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn" value="ok">Mostra</button></div>`,
+    (a, fd) => {
+      if (a === 'back') return setTimeout(adminHome, 50);
+      adminMonth = String(fd.get('mese'));
+      setTimeout(() => call('timbrature', monthParts(adminMonth), 'Carico le timbrature', out => {
+        statsShifts = out.timbrature || []; statsSites = out.cantieri || []; adminStats('');
+      }), 50);
+    });
+}
+function statsFor(filter) {
+  const ore = cfg().oreTurno;
+  const by = {};
+  statsShifts.filter(t => (!filter || t.dip === filter) && t.end).forEach(t => {
+    const k = t.cantiere || '—';
+    const x = by[k] || (by[k] = { nome: k, turni: 0, ore: 0, extra: 0, operatori: new Set() });
+    x.turni++;
+    x.ore += ore;
+    if (t.extra && t.statoExtra === 'Autorizzato') { x.ore += t.extra; x.extra += t.extra; }
+    x.operatori.add(t.dip);
+  });
+  return Object.values(by).sort((a, b) => b.ore - a.ore || a.nome.localeCompare(b.nome));
+}
+function adminStats(filter) {
+  const people = [...new Set(statsShifts.map(t => t.dip))].sort();
+  const rows = statsFor(filter);
+  const tot = rows.reduce((s, r) => ({ turni: s.turni + r.turni, ore: s.ore + r.ore, extra: s.extra + r.extra }), { turni: 0, ore: 0, extra: 0 });
+  const max = Math.max(1, ...rows.map(r => r.ore));
+  const color = n => (statsSites.find(c => c.nome === n) || {}).colore || 'var(--brand)';
+  const h = v => String(Math.round(v * 100) / 100).replace('.', ',');
+  const [y, m] = adminMonth.split('-');
+  const meseLabel = new Date(Number(y), Number(m) - 1, 1).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
+  const aperti = statsShifts.filter(t => (!filter || t.dip === filter) && !t.end).length;
+  openDialog(`
+    <h3>📈 Ore per cantiere</h3>
+    <p class="note">${esc(meseLabel)} · ogni turno vale ${cfg().oreTurno} ore + extra autorizzati</p>
+    <label>Operatore<select id="statWho"><option value="">Tutti gli operatori</option>${people.map(p => `<option ${p === filter ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
+    <div class="stat-tot">
+      <div><strong>${h(tot.ore)}</strong><span>ore totali</span></div>
+      <div><strong>${tot.turni}</strong><span>turni</span></div>
+      <div><strong>${rows.length}</strong><span>cantieri</span></div>
+    </div>
+    ${rows.length ? `<div class="stat-bars" role="img" aria-label="Ore per cantiere">${rows.map(r => `
+      <div class="stat-row">
+        <div class="stat-head"><span class="dot" style="background:${esc(color(r.nome))}"></span><b>${esc(r.nome)}</b><span class="stat-val">${h(r.ore)} h</span></div>
+        <div class="stat-track"><span style="width:${(r.ore / max * 100).toFixed(1)}%;background:${esc(color(r.nome))}"></span></div>
+        <div class="stat-sub">${r.turni} turn${r.turni === 1 ? 'o' : 'i'}${r.extra ? ` · +${h(r.extra)} h extra` : ''}${filter ? '' : ` · ${r.operatori.size} operator${r.operatori.size === 1 ? 'e' : 'i'}`} · ${Math.round(r.ore / (tot.ore || 1) * 100)}%</div>
+      </div>`).join('')}</div>` : '<p>Nessun turno chiuso in questo mese.</p>'}
+    ${aperti ? `<p class="note">${aperti} turn${aperti === 1 ? 'o' : 'i'} senza uscita non conteggiat${aperti === 1 ? 'o' : 'i'}.</p>` : ''}
+    <div class="row"><button class="btn ghost" value="month">Cambia mese</button><button class="btn" value="back">Indietro</button></div>`,
+    a => setTimeout(a === 'month' ? adminStatsPick : adminHome, 50));
+  $('#statWho').onchange = e => adminStats(e.target.value);
+}
+
 function adminShiftsPick() {
   openDialog(`
     <h3>✏️ Timbrature dei dipendenti</h3>
