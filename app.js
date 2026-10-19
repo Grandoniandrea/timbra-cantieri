@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 33;
+const APP_VERSION = 34;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -208,6 +208,7 @@ function render() {
   const n = db.shifts.filter(s => s.start >= startOfMonth()).length;
   $('#statMonthN').textContent = `${n} turn${n === 1 ? 'o' : 'i'} conclus${n === 1 ? 'o' : 'i'}`;
 
+  renderInterventi();
   renderPlan();
 
   // Cantieri
@@ -511,6 +512,259 @@ function toast(msg, undo) {
   if (undo) t.querySelector('button').onclick = () => { undo(); t.hidden = true; if (dlg.open) dlg.close(); };
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, undo ? UNDO_MS : 3000);
+}
+
+// ---------- Interventi (segnalazioni da ritirare) ----------
+// Il responsabile li crea e li assegna; l'operatore naviga, fa le foto prima/dopo, chiude e manda tutto su WhatsApp.
+const INT_TUTTI = 'Tutti';
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const hasCoord = c => /^\s*-?\d{1,3}\.\d+\s*,\s*-?\d{1,3}\.\d+\s*$/.test(String(c || ''));
+function navUrl(x) {
+  const dest = hasCoord(x.coord) ? x.coord.replace(/\s/g, '') : [x.indirizzo, x.localita].filter(Boolean).join(', ');
+  const q = encodeURIComponent(dest);
+  return isIOS() ? `https://maps.apple.com/?daddr=${q}&dirflg=d` : `https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=driving`;
+}
+const intWhere = x => [x.indirizzo, x.localita].filter(Boolean).join(', ');
+// Foto ridotte (lato lungo max 1280 px, JPEG) per inviarle anche con poco campo
+function compressImage(file, max = 1280, q = 0.72) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', q));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('foto')); };
+    img.src = url;
+  });
+}
+function dataUrlToFile(d, name) {
+  const [head, b64] = d.split(',');
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  return new File([bytes], name, { type: (head.match(/data:(.*?);/) || [])[1] || 'image/jpeg' });
+}
+
+// Operatore: scarica gli interventi assegnati a lui o a tutti
+let intSeen = null;
+async function syncInterventi() {
+  if (!db.endpoint || !db.user || navigator.onLine === false) return;
+  try {
+    const res = await withTimeout(fetch(`${db.endpoint}?azione=interventi&nome=${encodeURIComponent(fullName())}`), 20000);
+    const out = await res.json();
+    if (!out.ok || !Array.isArray(out.interventi)) return;
+    const prima = new Set((db.interventi || []).map(x => x.id));
+    const nuovi = out.interventi.filter(x => x.stato !== 'Fatto' && !prima.has(x.id));
+    if (JSON.stringify(out.interventi) !== JSON.stringify(db.interventi)) { db.interventi = out.interventi; save(); }
+    if (intSeen && nuovi.length) {
+      toast(nuovi.length === 1 ? `📍 Nuovo intervento: ${intWhere(nuovi[0])}` : `📍 ${nuovi.length} nuovi interventi`);
+      if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    }
+    intSeen = true;
+  } catch (e) { /* offline o script da aggiornare */ }
+}
+setInterval(() => { if (!document.hidden) syncInterventi(); }, 60000);
+const intDoneLocal = id => (db.intChiusi || {})[id];
+function renderInterventi() {
+  const box = $('#interventi');
+  if (!box) return;
+  if (!Array.isArray(db.interventi)) { box.hidden = true; return; }
+  const oggi = isoDay(new Date());
+  const daFare = db.interventi.filter(x => x.stato !== 'Fatto' && !intDoneLocal(x.id));
+  const fatti = db.interventi.filter(x => x.stato === 'Fatto' || intDoneLocal(x.id));
+  box.hidden = !daFare.length && !fatti.length;
+  if (box.hidden) return;
+  box.innerHTML = `<div class="sec-head"><div><small>SEGNALAZIONI</small><h2>Interventi${daFare.length ? ` <span class="badge">${daFare.length}</span>` : ''}</h2></div></div>
+    <ul class="list">${daFare.map(x => `<li class="int-row" data-int="${esc(x.id)}">
+      <span class="dot" style="background:#dc2626"></span>
+      <div class="grow"><b>${esc(intWhere(x))}</b><span>${x.data && x.data !== oggi ? esc(dayLabel(x.data)) + ' · ' : ''}${esc(x.cosa || 'da ritirare')}${x.cliente ? ' · ' + esc(x.cliente) : ''}</span></div>
+      <span class="pill">Apri</span></li>`).join('')}
+    ${fatti.slice(0, 5).map(x => `<li class="int-row done" data-int="${esc(x.id)}">
+      <span class="dot" style="background:var(--brand)"></span>
+      <div class="grow"><b>${esc(intWhere(x))}</b><span>✅ Fatto${intDoneLocal(x.id) && x.stato !== 'Fatto' ? ' · in invio' : ''}</span></div></li>`).join('')}</ul>`;
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-int]');
+  if (t && !dlg.open) intView(t.dataset.int);
+});
+const intFoto = {}; // foto scattate e non ancora inviate, per intervento
+function intView(id) {
+  const x = (db.interventi || []).find(i => i.id === id);
+  if (!x) return;
+  const f = intFoto[id] || (intFoto[id] = {});
+  const done = x.stato === 'Fatto' || intDoneLocal(id);
+  const thumb = (k, label) => `<label class="int-photo">${f[k] ? `<img src="${f[k]}" alt="${label}"><small>${label} ✓ · tocca per rifarla</small>` : `<span>📷 ${label}</span>`}
+      ${done ? '' : `<input type="file" accept="image/*" capture="environment" data-foto="${k}" hidden>`}</label>`;
+  openDialog(`
+    <h3>📍 Intervento</h3>
+    <div class="int-info">
+      <b>${esc(intWhere(x))}</b>
+      ${x.cliente ? `<span>👤 ${esc(x.cliente)}</span>` : ''}
+      ${x.cosa ? `<span>📦 ${esc(x.cosa)}</span>` : ''}
+      ${x.note ? `<span>📝 ${esc(x.note)}</span>` : ''}
+      ${x.data ? `<span>📅 ${esc(dayLabel(x.data))}</span>` : ''}
+    </div>
+    ${x.screenshot ? '<div id="intShot"><button class="btn ghost" value="shot" formnovalidate>🖼️ Vedi la segnalazione</button></div>' : ''}
+    <a class="btn" href="${esc(navUrl(x))}" target="_blank" rel="noopener">🧭 Naviga</a>
+    ${done ? '<p class="note">✅ Intervento chiuso.</p>' : `
+    <div class="int-photos">${thumb('prima', 'Foto prima')}${thumb('dopo', 'Foto dopo')}</div>
+    <label>Nota (facoltativa)<input name="nota" maxlength="300" value="${esc(f.nota || '')}" placeholder="es. ritirato anche un materasso"></label>
+    <button class="btn" value="fatto">✅ Fatto: invia al responsabile</button>`}
+    <button class="btn ghost" value="close" formnovalidate>Chiudi</button>`, (a, fd) => {
+    if (fd.get('nota') !== null) f.nota = String(fd.get('nota') || '');
+    if (a === 'shot') { setTimeout(() => intShowShot(x), 50); return; }
+    if (a === 'fatto') {
+      if (!f.dopo) { alert('Fai almeno la foto dopo il ritiro.'); return false; }
+      setTimeout(() => intClose(x), 50);
+    }
+  });
+  document.querySelectorAll('[data-foto]').forEach(inp => {
+    inp.onchange = async () => {
+      const file = inp.files && inp.files[0];
+      if (!file) return;
+      try { f[inp.dataset.foto] = await compressImage(file); } catch (e) { alert('Non riesco a leggere la foto, riprova.'); }
+      const nota = $('#dlgBody input[name=nota]');
+      if (nota) f.nota = nota.value;
+      intView(id);
+    };
+  });
+}
+async function intShowShot(x) {
+  openDialog('<h3>🖼️ Segnalazione</h3><p>Carico l\'immagine…</p><button class="btn ghost" value="back">Indietro</button>', () => setTimeout(() => intView(x.id), 50));
+  try {
+    const res = await withTimeout(fetch(`${db.endpoint}?azione=fotointervento&tipo=screenshot&id=${encodeURIComponent(x.id)}`), 30000);
+    const out = await res.json();
+    if (!dlg.open) return;
+    openDialog(`<h3>🖼️ Segnalazione</h3>${out.foto ? `<img class="int-shot" src="${out.foto}" alt="Segnalazione">` : '<p>Immagine non disponibile.</p>'}
+      <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(() => intView(x.id), 50));
+  } catch (e) {
+    openDialog('<h3>🖼️ Segnalazione</h3><p>Serve la connessione per vedere l\'immagine.</p><button class="btn ghost" value="back">Indietro</button>', () => setTimeout(() => intView(x.id), 50));
+  }
+}
+async function intClose(x) {
+  const f = intFoto[x.id] || {};
+  busy('Chiudo l\'intervento');
+  const pos = await getPos();
+  const at = Date.now();
+  enqueue({ type: 'intervento', intervento: { id: x.id, fotoPrima: f.prima || null, fotoDopo: f.dopo || null, nota: f.nota || '', at, pos: pos.errore ? null : pos } });
+  db.intChiusi = Object.assign({}, db.intChiusi, { [x.id]: at });
+  save();
+  const c = cfg();
+  const text = [`✅ Intervento fatto`, intWhere(x), x.cliente ? `Cliente: ${x.cliente}` : '', x.cosa ? `Ritirato: ${x.cosa}` : '',
+    `Ora: ${fmtTime(at)} del ${new Date(at).toLocaleDateString('it-IT')}`, `Operatore: ${fullName()}`, f.nota ? `Nota: ${f.nota}` : ''].filter(Boolean).join('\n');
+  const files = [f.prima && dataUrlToFile(f.prima, 'prima.jpg'), f.dopo && dataUrlToFile(f.dopo, 'dopo.jpg')].filter(Boolean);
+  openDialog(`<h3>✅ Intervento chiuso</h3>
+    <p>Foto e dati partono verso il registro appena c'è rete. Ora mandali al responsabile su WhatsApp.</p>
+    <button class="btn" value="share">📤 Invia foto su WhatsApp</button>
+    <a class="btn ghost" href="https://wa.me/${esc(c.autorizzaTelefono || '')}?text=${encodeURIComponent(text)}" target="_blank" rel="noopener">💬 Solo il messaggio</a>
+    <button class="btn ghost" value="">Chiudi</button>`, async a => {
+    if (a !== 'share') return;
+    if (navigator.canShare && files.length && navigator.canShare({ files })) {
+      try { await navigator.share({ files, text, title: 'Intervento fatto' }); } catch (e) { /* annullato */ }
+    } else {
+      window.open(`https://wa.me/${c.autorizzaTelefono || ''}?text=${encodeURIComponent(text)}`, '_blank');
+    }
+  });
+  delete intFoto[x.id];
+}
+
+// Responsabile: elenco, nuovo intervento, dettaglio con foto
+let admInt = [], admIntPeople = [];
+function adminInterventi() {
+  call('interventi', null, 'Carico gli interventi', out => {
+    if (!Array.isArray(out.interventi)) return fail('Per usare gli interventi va aggiornato lo script Google (guida nel repository).');
+    admInt = out.interventi; admIntPeople = (out.operatori || []).filter(o => o.attivo !== false);
+    adminIntList();
+  });
+}
+function adminIntList() {
+  const daFare = admInt.filter(x => x.stato !== 'Fatto'), fatti = admInt.filter(x => x.stato === 'Fatto').slice(0, 30);
+  const row = x => `<button type="button" class="shift-row" data-aint="${esc(x.id)}">
+    <b>${x.stato === 'Fatto' ? '✅' : '📍'} ${esc(intWhere(x))}</b><br>
+    <span>${x.data ? esc(dayLabel(x.data)) + ' · ' : ''}${esc(x.assegnato)}${x.cosa ? ' · ' + esc(x.cosa) : ''}${x.stato === 'Fatto' ? ` · fatto da ${esc(x.fattoDa)} alle ${fmtTime(x.fattoIl)}` : ''}</span></button>`;
+  openDialog(`
+    <h3>📍 Interventi</h3>
+    <button class="btn" value="new">➕ Nuovo intervento</button>
+    <div class="adm-list">
+      ${daFare.length ? `<p><b>Da fare (${daFare.length})</b></p>${daFare.map(row).join('')}` : '<p class="note">Nessun intervento da fare.</p>'}
+      ${fatti.length ? `<p><b>Fatti</b></p>${fatti.map(row).join('')}` : ''}
+    </div>
+    <button class="btn ghost" value="back">Indietro</button>`, a => {
+    if (a === 'new') { admShot = null; setTimeout(() => adminIntEdit(null), 50); }
+    if (a === 'back') setTimeout(adminHome, 50);
+  });
+  document.querySelectorAll('[data-aint]').forEach(b => {
+    b.onclick = () => { const x = admInt.find(i => i.id === b.dataset.aint); if (x) { admShot = null; (x.stato === 'Fatto' ? adminIntDone(x) : adminIntEdit(x)); } };
+  });
+}
+let admShot = null;
+function adminIntEdit(x, keep) {
+  const v = Object.assign({}, x || { data: isoDay(new Date()), assegnato: INT_TUTTI }, keep || {});
+  openDialog(`
+    <h3>${x ? 'Modifica intervento' : '➕ Nuovo intervento'}</h3>
+    <label>Giorno<input type="date" name="data" value="${esc(v.data || isoDay(new Date()))}"></label>
+    <label>Cliente<input name="cliente" maxlength="80" value="${esc(v.cliente || '')}" placeholder="nome e cognome"></label>
+    <label>Via e numero<input name="indirizzo" required maxlength="120" value="${esc(v.indirizzo || '')}" placeholder="es. Via Roma 12"></label>
+    <label>Località<input name="localita" maxlength="60" value="${esc(v.localita || '')}" placeholder="es. Pontedera"></label>
+    <label>Coordinate (facoltative)<input name="coord" maxlength="60" value="${esc(v.coord || '')}" placeholder="es. 43.6629, 10.6328" inputmode="decimal"></label>
+    <label>Cosa ritirare<textarea name="cosa" maxlength="500" rows="2" placeholder="es. divano 3 posti, 2 sedie">${esc(v.cosa || '')}</textarea></label>
+    <label>Note<input name="note" maxlength="300" value="${esc(v.note || '')}" placeholder="es. citofono Rossi, materiale in giardino"></label>
+    <label>Assegna a<select name="assegnato"><option>${INT_TUTTI}</option>${admIntPeople.map(p => `<option ${p.nome === v.assegnato ? 'selected' : ''}>${esc(p.nome)}</option>`).join('')}</select></label>
+    <label class="int-photo wide">${admShot ? `<img src="${admShot}" alt="Screenshot">` : `<span>🖼️ ${x && x.screenshot ? 'Cambia lo screenshot della segnalazione' : 'Allega lo screenshot della segnalazione'}</span>`}
+      <input type="file" accept="image/*" id="admShotIn" hidden></label>
+    <div class="row">
+      ${x ? '<button class="btn ghost danger-text" value="del" formnovalidate>Elimina</button>' : ''}
+      <button class="btn ghost" value="back" formnovalidate>Annulla</button>
+      <button class="btn" value="save">Salva</button>
+    </div>`, (a, fd) => {
+    if (a === 'back') { admShot = null; return setTimeout(adminIntList, 50); }
+    if (a === 'del') {
+      if (!confirm('Eliminare questo intervento?')) return false;
+      return setTimeout(() => call('eliminaintervento', { id: x.id }, 'Elimino', out => { admInt = out.interventi; adminIntList(); }), 50);
+    }
+    const it = { id: x ? x.id : uid() };
+    ['data', 'cliente', 'indirizzo', 'localita', 'coord', 'cosa', 'note', 'assegnato'].forEach(k => { it[k] = String(fd.get(k) || '').trim(); });
+    if (admShot) it.screenshot = admShot;
+    setTimeout(() => call('salvaintervento', { intervento: it }, 'Salvo l\'intervento', out => {
+      admInt = out.interventi; admShot = null; toast('Intervento salvato ✓'); adminIntList();
+    }), 50);
+  });
+  $('#admShotIn').onchange = async e => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    // Conserva quanto già scritto prima di ridisegnare
+    const fd = new FormData($('#dlgBody'));
+    const keep = Object.assign({}, Object.fromEntries(['data', 'cliente', 'indirizzo', 'localita', 'coord', 'cosa', 'note', 'assegnato'].map(k => [k, String(fd.get(k) || '')])));
+    try { admShot = await compressImage(file, 1600, 0.75); } catch (err) { alert('Non riesco a leggere l\'immagine.'); }
+    adminIntEdit(x, keep);
+  };
+}
+function adminIntDone(x) {
+  openDialog(`
+    <h3>✅ Intervento fatto</h3>
+    <div class="int-info">
+      <b>${esc(intWhere(x))}</b>
+      ${x.cliente ? `<span>👤 ${esc(x.cliente)}</span>` : ''}
+      ${x.cosa ? `<span>📦 ${esc(x.cosa)}</span>` : ''}
+      <span>👷 ${esc(x.fattoDa)} · ${new Date(x.fattoIl).toLocaleDateString('it-IT')} alle ${fmtTime(x.fattoIl)}</span>
+      ${x.notaOp ? `<span>📝 ${esc(x.notaOp)}</span>` : ''}
+    </div>
+    <div class="int-photos" id="admPhotos"><div class="int-photo"><span>Carico le foto…</span></div></div>
+    ${x.posChiusura && /^https:/.test(x.posChiusura) ? `<a class="btn ghost" href="${esc(x.posChiusura.split(' ')[0])}" target="_blank" rel="noopener">📍 Dove è stato chiuso</a>` : ''}
+    <div class="row"><button class="btn ghost" value="reopen" formnovalidate>Riapri</button><button class="btn" value="back">Indietro</button></div>`, a => {
+    if (a === 'reopen') return setTimeout(() => call('riapriintervento', { id: x.id }, 'Riapro', out => { admInt = out.interventi; adminIntList(); }), 50);
+    setTimeout(adminIntList, 50);
+  });
+  Promise.all(['prima', 'dopo'].map(t => (x[t === 'prima' ? 'fotoPrima' : 'fotoDopo'] ? adminCall('fotointervento', { id: x.id, tipo: t }).then(o => o.foto).catch(() => null) : Promise.resolve(null))))
+    .then(([prima, dopo]) => {
+      const box = $('#admPhotos');
+      if (!box) return;
+      const one = (src, l) => `<div class="int-photo">${src ? `<img src="${src}" alt="${l}">` : `<span>${l}: nessuna</span>`}<small>${l}</small></div>`;
+      box.innerHTML = one(prima, 'Prima') + one(dopo, 'Dopo');
+    });
 }
 
 // ---------- Programma della settimana ----------
@@ -886,7 +1140,7 @@ $('#btnWho').onclick = () => editProfile();
 function enqueue(op) {
   op.opId = uid();
   // Per la stessa timbratura conta solo l'ultima operazione.
-  const keyOf = o => o.shift ? o.shift.id : o.assenza ? o.assenza.id : o.id;
+  const keyOf = o => o.shift ? o.shift.id : o.assenza ? o.assenza.id : o.intervento ? 'int' + o.intervento.id : o.id;
   const key = keyOf(op);
   db.queue = db.queue.filter(o => keyOf(o) !== key);
   db.queue.push(op);
@@ -1181,6 +1435,7 @@ function adminHome() {
     <div class="menu">
       <button class="btn ghost" value="sites">🏗️ Cantieri: aggiungi, togli, rinomina</button>
       <button class="btn ghost" value="report">📊 Report del mese: PDF, stampa, email, condividi</button>
+      <button class="btn ghost" value="int">📍 Interventi da assegnare</button>
       <button class="btn ghost" value="plan">📅 Programma della settimana</button>
       <button class="btn ghost" value="stats">📈 Statistiche ore per cantiere</button>
       <button class="btn ghost" value="extra">⏱️ Ore extra da autorizzare${adminExtraCount ? ` <span class="badge">${adminExtraCount}</span>` : ''}</button>
@@ -1199,6 +1454,7 @@ function adminHome() {
       report: adminReportPick,
       stats: adminStatsPick,
       plan: () => adminPlan(),
+      int: adminInterventi,
       shifts: adminShiftsPick,
       extra: () => call('extra', null, 'Carico le richieste', out => adminExtra(out.extra)),
       assenze: () => call('assenze', null, 'Carico ferie e permessi', out => adminAbsences(out.assenze)),
@@ -1615,9 +1871,10 @@ function handleConnect() {
 render();
 const afterProfile = () => { if (!handleConnect()) handleNfc(); };
 if (db.user) afterProfile(); else editProfile(afterProfile);
-window.addEventListener('online', () => { flush(); syncSites(); syncPlan(); });
+window.addEventListener('online', () => { flush(); syncSites(); syncPlan(); syncInterventi(); });
 syncSites();
 syncPlan();
+syncInterventi();
 setInterval(flush, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); db.queue = db.queue || []; db.endpoint = db.endpoint || DEFAULT_ENDPOINT; render(); flush(); syncSites(); syncPlan(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); db.queue = db.queue || []; db.endpoint = db.endpoint || DEFAULT_ENDPOINT; render(); flush(); syncSites(); syncPlan(); syncInterventi(); } });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

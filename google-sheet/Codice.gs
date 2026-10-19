@@ -67,6 +67,7 @@ function doPost(e) {
       if (op.type === 'upsert') upsert_(op.shift, body.user);
       else if (op.type === 'delete') remove_(op.id);
       else if (op.type === 'assenza') salvaAssenza_(op.assenza, body.user);
+      else if (op.type === 'intervento') chiudiIntervento_(op.intervento, body.user);
       ok.push(op.opId);
     });
     try { avvisiImmediati(); } catch (err) { /* l'avviso non deve bloccare la timbratura */ }
@@ -81,6 +82,10 @@ function doPost(e) {
 // Apri l'URL della web app nel browser per verificare che funzioni.
 function doGet(e) {
   if (e && e.parameter && e.parameter.azione === 'programma') return json_(programmaPubblico_(e));
+  if (e && e.parameter && e.parameter.azione === 'interventi') return json_(interventiPubblico_(e));
+  if (e && e.parameter && e.parameter.azione === 'fotointervento') {
+    return json_({ ok: true, foto: fotoIntervento_(String(e.parameter.id || ''), String(e.parameter.tipo || '')) });
+  }
   if (e && e.parameter && e.parameter.azione === 'assenze') {
     return json_({ ok: true, assenze: assenze_().filter(a => a.device && a.device === String(e.parameter.device || '')) });
   }
@@ -165,6 +170,11 @@ function admin_(req) {
     case 'salvaprogramma': salvaProgramma_(req.da, req.a, req.squadre);
       return { ok: true, squadre: programma_(req.da, req.a), operatori: operatori_(), cantieri: tuttiCantieri_() };
     case 'operatori': salvaOperatori_(req.operatori); return { ok: true, operatori: operatori_() };
+    case 'interventi': return { ok: true, interventi: interventi_(), operatori: operatori_() };
+    case 'salvaintervento': salvaIntervento_(req.intervento); return { ok: true, interventi: interventi_(), operatori: operatori_() };
+    case 'eliminaintervento': eliminaIntervento_(req.id); return { ok: true, interventi: interventi_(), operatori: operatori_() };
+    case 'riapriintervento': riapriIntervento_(req.id); return { ok: true, interventi: interventi_(), operatori: operatori_() };
+    case 'fotointervento': return { ok: true, foto: fotoIntervento_(req.id, req.tipo) };
     case 'azzera': azzera_(); return { ok: true };
     case 'sede': impostaSede_(req.sede); return { ok: true, sede: sede_() };
     case 'assenze': return { ok: true, assenze: assenze_() };
@@ -931,4 +941,133 @@ function programmaPubblico_(e) {
   const da = daIso_(e.parameter.da) ? e.parameter.da : dataIso_(oggi);
   const a = daIso_(e.parameter.a) ? e.parameter.a : dataIso_(fra);
   return { ok: true, squadre: programma_(da, a) };
+}
+
+// ---------- Interventi (segnalazioni da ritirare) ----------
+// Il responsabile crea l'intervento dall'app (dati del cliente, cosa ritirare, screenshot dell'email) e lo assegna.
+// L'operatore lo vede, naviga, fa le foto prima e dopo e lo chiude. Le foto vanno in una cartella di Google Drive.
+
+const FOGLIO_INTERVENTI = 'Interventi';
+const INTEST_INTERVENTI = ['ID', 'Creato', 'Data', 'Cliente', 'Indirizzo', 'Località', 'Coordinate', 'Cosa ritirare', 'Note',
+  'Assegnato a', 'Stato', 'Fatto il', 'Fatto da', 'Nota operatore', 'Screenshot', 'Foto prima', 'Foto dopo', 'Posizione chiusura'];
+const INT_DA_FARE = 'Da fare', INT_FATTO = 'Fatto';
+const INT_TUTTI = 'Tutti';
+
+function foglioInterventi_() {
+  const ss = ss_();
+  let sh = ss.getSheetByName(FOGLIO_INTERVENTI);
+  if (!sh) {
+    sh = ss.insertSheet(FOGLIO_INTERVENTI);
+    sh.appendRow(INTEST_INTERVENTI);
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, INTEST_INTERVENTI.length).setFontWeight('bold').setBackground('#e7f2ea');
+    sh.hideColumns(1);
+    sh.getRange('B:B').setNumberFormat('dd/mm/yyyy HH:mm');
+    sh.getRange('C:C').setNumberFormat('dd/mm/yyyy');
+    sh.getRange('L:L').setNumberFormat('dd/mm/yyyy HH:mm');
+  }
+  return sh;
+}
+
+/** Cartella Drive "GE3CO Interventi" (creata la prima volta). */
+function cartellaInterventi_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('CARTELLA_INTERVENTI');
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) { /* cancellata: se ne crea un'altra */ } }
+  const f = DriveApp.createFolder('GE3CO Interventi');
+  props.setProperty('CARTELLA_INTERVENTI', f.getId());
+  return f;
+}
+
+function salvaFoto_(base64, nome) {
+  const m = /^data:(image\/(jpeg|png|webp));base64,(.+)$/.exec(String(base64 || ''));
+  if (!m) return '';
+  const blob = Utilities.newBlob(Utilities.base64Decode(m[3]), m[1], nome + (m[2] === 'png' ? '.png' : '.jpg'));
+  return cartellaInterventi_().createFile(blob).getId();
+}
+
+function intRiga_(r) {
+  return { id: String(r[0]), creato: r[1] instanceof Date ? r[1].getTime() : null,
+    data: r[2] instanceof Date ? dataIso_(r[2]) : '', cliente: String(r[3] || ''), indirizzo: String(r[4] || ''),
+    localita: String(r[5] || ''), coord: String(r[6] || ''), cosa: String(r[7] || ''), note: String(r[8] || ''),
+    assegnato: String(r[9] || INT_TUTTI), stato: String(r[10] || INT_DA_FARE),
+    fattoIl: r[11] instanceof Date ? r[11].getTime() : null, fattoDa: String(r[12] || ''), notaOp: String(r[13] || ''),
+    screenshot: !!r[14], fotoPrima: !!r[15], fotoDopo: !!r[16], posChiusura: String(r[17] || '') };
+}
+
+function interventi_() {
+  const sh = foglioInterventi_();
+  if (sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, INTEST_INTERVENTI.length).getValues()
+    .filter(r => r[0]).map(intRiga_)
+    .sort((a, b) => (a.stato === b.stato ? 0 : a.stato === INT_DA_FARE ? -1 : 1) || (a.data || '').localeCompare(b.data || '') || (a.creato - b.creato));
+}
+
+/** Nuovo intervento o modifica (dal responsabile). */
+function salvaIntervento_(x) {
+  if (!x || !String(x.indirizzo || '').trim()) return;
+  const sh = foglioInterventi_();
+  const id = String(x.id || Utilities.getUuid()).slice(0, 40);
+  let r = trovaRiga_(sh, id);
+  const prima = r ? sh.getRange(r, 1, 1, INTEST_INTERVENTI.length).getValues()[0] : null;
+  const giorno = daIso_(x.data) || new Date(new Date().setHours(0, 0, 0, 0));
+  const shot = x.screenshot ? salvaFoto_(x.screenshot, 'segnalazione ' + dataIso_(giorno) + ' ' + String(x.indirizzo).slice(0, 40)) : (prima ? prima[14] : '');
+  const row = [id, prima ? prima[1] : new Date(), giorno, String(x.cliente || '').slice(0, 80), String(x.indirizzo).trim().slice(0, 120),
+    String(x.localita || '').trim().slice(0, 60), String(x.coord || '').trim().slice(0, 60), String(x.cosa || '').slice(0, 500),
+    String(x.note || '').slice(0, 300), String(x.assegnato || INT_TUTTI).slice(0, 80),
+    prima ? prima[10] : INT_DA_FARE, prima ? prima[11] : '', prima ? prima[12] : '', prima ? prima[13] : '',
+    shot, prima ? prima[15] : '', prima ? prima[16] : '', prima ? prima[17] : ''];
+  if (r) sh.getRange(r, 1, 1, row.length).setValues([row]);
+  else sh.appendRow(row);
+  return id;
+}
+
+function riapriIntervento_(id) {
+  const sh = foglioInterventi_();
+  const r = trovaRiga_(sh, id);
+  if (r) sh.getRange(r, 11, 1, 3).setValues([[INT_DA_FARE, '', '']]);
+}
+
+function eliminaIntervento_(id) {
+  const sh = foglioInterventi_();
+  const r = trovaRiga_(sh, id);
+  if (!r) return;
+  const v = sh.getRange(r, 15, 1, 3).getValues()[0];
+  v.filter(Boolean).forEach(fid => { try { DriveApp.getFileById(fid).setTrashed(true); } catch (e) { /* già tolta */ } });
+  sh.deleteRow(r);
+}
+
+/** Chiusura dall'operatore (arriva in coda con le timbrature): foto prima/dopo, nota, posizione. */
+function chiudiIntervento_(x, user) {
+  if (!x || !x.id) return;
+  const sh = foglioInterventi_();
+  const r = trovaRiga_(sh, x.id);
+  if (!r) return;
+  const riga = sh.getRange(r, 1, 1, INTEST_INTERVENTI.length).getValues()[0];
+  const base = dataIso_(new Date()) + ' ' + String(riga[4]).slice(0, 40);
+  const prima = x.fotoPrima ? salvaFoto_(x.fotoPrima, base + ' prima') : riga[15];
+  const dopo = x.fotoDopo ? salvaFoto_(x.fotoDopo, base + ' dopo') : riga[16];
+  sh.getRange(r, 11, 1, 8).setValues([[INT_FATTO, x.at ? new Date(x.at) : new Date(), user && user.name || 'Sconosciuto',
+    String(x.nota || '').slice(0, 300), riga[14], prima, dopo, mappa_(x.pos) || '']]);
+}
+
+/** Foto di un intervento come base64 (così non serve condividere i file di Drive). */
+function fotoIntervento_(id, tipo) {
+  const sh = foglioInterventi_();
+  const r = trovaRiga_(sh, id);
+  if (!r) return null;
+  const col = { screenshot: 15, prima: 16, dopo: 17 }[tipo];
+  const fid = col && sh.getRange(r, col).getValue();
+  if (!fid) return null;
+  const blob = DriveApp.getFileById(fid).getBlob();
+  return 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes());
+}
+
+/** Per gli operatori: interventi assegnati a loro o a tutti, da fare o chiusi negli ultimi 2 giorni. */
+function interventiPubblico_(e) {
+  const nome = String(e.parameter.nome || '').trim().toLowerCase();
+  const limite = Date.now() - 2 * 864e5;
+  const lista = interventi_().filter(x => (x.assegnato === INT_TUTTI || x.assegnato.toLowerCase() === nome) &&
+    (x.stato === INT_DA_FARE || (x.fattoIl && x.fattoIl > limite)));
+  return { ok: true, interventi: lista };
 }
