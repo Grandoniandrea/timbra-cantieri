@@ -134,7 +134,8 @@ function creaRiepilogo_(anno, mese) {
   const ss = ss_();
   const sh = foglio_();
   const da = new Date(anno, mese, 1), a = new Date(anno, mese + 1, 1);
-  const nomeMese = Utilities.formatDate(da, Session.getScriptTimeZone(), 'MMMM yyyy');
+  const MESI = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+  const nomeMese = MESI[mese] + ' ' + anno;
   const dati = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, INTESTAZIONE.length).getValues() : [];
 
   // dipendente -> { ore, giorni:Set, cantieri:{nome:ore}, aperti }
