@@ -171,3 +171,15 @@ dialog input, dialog select {
 /* Niente zoom col doppio tocco (serve per i tocchi sul logo) */
 html, button, .logo { touch-action: manipulation; }
 .logo { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-user-drag: none; cursor: pointer; }
+.extra-tag { display: block; font-size: 11px; color: #b45309; font-weight: 600; text-align: right; }
+.motivi { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.motivi label { display: flex !important; align-items: center; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; font-weight: 600; }
+.motivi input { width: 20px; min-height: 20px; height: 20px; }
+dialog textarea { font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); width: 100%; }
+.err { color: var(--danger) !important; font-weight: 600; }
+a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }
+.btn.wa { background: #25d366; color: #06140b; }
+.badge { background: var(--danger); color: #fff; border-radius: 999px; padding: 1px 8px; font-size: 13px; margin-left: 6px; }
+.extra-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: var(--bg); line-height: 1.5; }
+.extra-card .row { margin-top: 8px; }
+.extra-card span { font-size: 13px; color: var(--muted); }

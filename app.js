@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 12;
+const APP_VERSION = 13;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -107,7 +107,7 @@ function render() {
       <button class="btn big danger" id="btnOut">Timbra uscita</button>`;
     const tick = () => { const el = $('#timer'); if (el) el.textContent = fmtClock(Date.now() - db.active.start); };
     tick(); timer = setInterval(tick, 1000);
-    $('#btnOut').onclick = () => clockOut();
+    $('#btnOut').onclick = () => { const sh = clockOut(); if (sh) afterClockOut(sh, false); };
   } else {
     st.className = 'card status';
     st.innerHTML = `
@@ -150,7 +150,7 @@ function render() {
     return `<li ${isEmployee() ? '' : `data-edit-shift="${s.id}" style="cursor:pointer"`}>
       <span class="dot" style="background:${esc(site.color)}"></span>
       <div class="grow"><b>${esc(site.name)}</b><span>${fmtDate(s.start)} · ${fmtTime(s.start)} → ${fmtTime(s.end)}</span></div>
-      <span class="log-dur">${fmtDur(s.end - s.start)}</span>
+      <span class="log-dur">${fmtDur(s.end - s.start)}${extraMin(s) ? `<small class="extra-tag">+${fmtDur(extraMin(s) * 60000)} extra</small>` : ''}</span>
     </li>`;
   }).join('') : '<li class="empty">Le tue timbrature compariranno qui.</li>';
 }
@@ -271,8 +271,7 @@ function handleNfc() {
   if (!db.active) { pickSiteForNfc(); return; }
   const doOut = () => {
     const shift = clockOut();
-    if (shift) showBigOk('Uscita', siteById(shift.siteId).name,
-      `${fmtTime(shift.start)} → ${fmtTime(shift.end)} · ${fmtDur(shift.end - shift.start)}`, shift.undo);
+    if (shift) afterClockOut(shift, true);
   };
   if (Date.now() - db.active.start < DOUBLE_TAP_MS) {
     openDialog(`
@@ -295,10 +294,10 @@ function download(name, text, type) {
 }
 const fullName = () => db.user ? `${db.user.first} ${db.user.last}` : '';
 function buildCsv(from) {
-  const rows = [['Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Minuti', 'Ore']];
+  const rows = [['Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Minuti', 'Ore', 'Extra (min)', 'Motivo extra']];
   db.shifts.filter(s => s.start >= from).sort((a, b) => a.start - b.start).forEach(s => {
     const min = Math.round((s.end - s.start) / 60000);
-    rows.push([fullName(), new Date(s.start).toLocaleDateString('it-IT'), siteById(s.siteId).name, fmtTime(s.start), fmtTime(s.end), min, (min / 60).toFixed(2).replace('.', ',')]);
+    rows.push([fullName(), new Date(s.start).toLocaleDateString('it-IT'), siteById(s.siteId).name, fmtTime(s.start), fmtTime(s.end), min, (min / 60).toFixed(2).replace('.', ','), extraMin(s) || '', s.extra ? s.extra.motivo + (s.extra.nota ? ' – ' + s.extra.nota : '') : '']);
   });
   return '\ufeff' + rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
 }
@@ -447,7 +446,7 @@ function enqueue(op) {
   db.queue.push(op);
 }
 function enqueueUpsert(s) {
-  enqueue({ type: 'upsert', shift: { id: s.id, start: s.start, end: s.end || null, site: siteById(s.siteId).name } });
+  enqueue({ type: 'upsert', shift: { id: s.id, start: s.start, end: s.end || null, site: siteById(s.siteId).name, extra: s.extra || null } });
 }
 function enqueueDelete(id) { enqueue({ type: 'delete', id }); }
 function resyncAll() {
@@ -489,6 +488,7 @@ async function syncSites() {
     const res = await fetch(db.endpoint + '?azione=cantieri');
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.cantieri)) return;
+    if (out.config && JSON.stringify(out.config) !== JSON.stringify(db.config)) { db.config = out.config; save(); }
     const names = out.cantieri;
     const byName = new Map(db.sites.map(s => [s.name, s]));
     const visible = names.map((name, i) => {
@@ -502,9 +502,69 @@ async function syncSites() {
   } catch (e) { /* offline: si tengono i cantieri già scaricati */ }
 }
 
+// ---------- Ore extra oltre il turno standard (5 ore) ----------
+const cfg = () => Object.assign({ oreTurno: 5, tolleranzaMin: 15, autorizzaNome: '', autorizzaTelefono: '' }, db.config || {});
+// Minuti oltre il turno standard (0 se entro la tolleranza)
+function extraMin(s) {
+  if (!s.end) return 0;
+  const c = cfg(), min = Math.round((s.end - s.start) / 60000);
+  return min > c.oreTurno * 60 + c.tolleranzaMin ? min - c.oreTurno * 60 : 0;
+}
+function afterClockOut(shift, viaNfc) {
+  if (extraMin(shift)) return setTimeout(() => justifyExtra(shift), 50);
+  if (viaNfc) showBigOk('Uscita', siteById(shift.siteId).name,
+    `${fmtTime(shift.start)} → ${fmtTime(shift.end)} · ${fmtDur(shift.end - shift.start)}`, shift.undo);
+}
+const MOTIVI = ['Guasto del mezzo', 'Foratura', 'Incidente', 'Altro'];
+function justifyExtra(shift, msg) {
+  $('#toast').hidden = true;
+  const c = cfg();
+  openDialog(`
+    <h3>⏱️ Turno oltre le ${c.oreTurno} ore</h3>
+    <p>${esc(siteById(shift.siteId).name)} · ${fmtTime(shift.start)} → ${fmtTime(shift.end)} = <b>${fmtDur(shift.end - shift.start)}</b>
+      (${fmtDur(extraMin(shift) * 60000)} in più). Le ore extra vanno giustificate e autorizzate${c.autorizzaNome ? ' da ' + esc(c.autorizzaNome) : ''}.</p>
+    ${msg ? `<p class="err">${esc(msg)}</p>` : ''}
+    <div class="motivi">${MOTIVI.map((m, i) => `<label><input type="radio" name="motivo" value="${m}" ${i === 0 ? 'required' : ''}> ${m}</label>`).join('')}</div>
+    <label>Cosa è successo<textarea name="nota" rows="3" maxlength="300" placeholder="Es. foratura sulla SS67, attesa carro attrezzi"></textarea></label>
+    <button class="btn" value="ok">Conferma</button>
+    <button class="btn ghost" value="undo" formnovalidate>Ho sbagliato a timbrare l'uscita</button>`,
+    (a, fd) => {
+      if (a === 'undo') { shift.undo(); toast('Uscita annullata: il turno è ancora aperto'); return; }
+      const motivo = String(fd.get('motivo') || ''), nota = String(fd.get('nota') || '').trim();
+      if (!motivo) return setTimeout(() => justifyExtra(shift, 'Scegli il motivo.'), 50);
+      if (motivo === 'Altro' && !nota) return setTimeout(() => justifyExtra(shift, 'Scrivi cosa è successo.'), 50);
+      const s = db.shifts.find(x => x.id === shift.id) || shift;
+      s.extra = { motivo, nota };
+      enqueueUpsert(s);
+      save();
+      setTimeout(() => askAuthorization(s), 50);
+    });
+  dlg.oncancel = e => e.preventDefault(); // la giustificazione è obbligatoria
+}
+function authMessage(s) {
+  return [`*Richiesta autorizzazione ore extra*`,
+    `Dipendente: ${fullName()}`,
+    `Cantiere: ${siteById(s.siteId).name}`,
+    `Data: ${new Date(s.start).toLocaleDateString('it-IT')}`,
+    `Orario: ${fmtTime(s.start)} → ${fmtTime(s.end)} (${fmtDur(s.end - s.start)})`,
+    `Ore extra: ${fmtDur(extraMin(s) * 60000)}`,
+    `Motivo: ${s.extra.motivo}${s.extra.nota ? ' – ' + s.extra.nota : ''}`].join('\n');
+}
+function askAuthorization(s) {
+  const c = cfg();
+  const url = `https://wa.me/${c.autorizzaTelefono || ''}?text=${encodeURIComponent(authMessage(s))}`;
+  openDialog(`
+    <h3>📲 Chiedi l'autorizzazione</h3>
+    <p>Manda la richiesta${c.autorizzaNome ? ' a <b>' + esc(c.autorizzaNome) + '</b>' : ''} su WhatsApp: il messaggio è già scritto.
+      Le ore extra contano solo dopo l'autorizzazione.</p>
+    <a class="btn big wa" href="${esc(url)}" target="_blank" rel="noopener">Invia su WhatsApp</a>
+    <button class="btn ghost" value="">Fatto</button>`);
+}
+
 // ---------- Pannello responsabile (password verificata dallo script) ----------
 let adminPwd = null; // solo in memoria: chiusa l'app, la password va reinserita
 let adminMonth = null; // 'AAAA-MM' scelto nel pannello
+let adminExtraCount = 0;
 async function adminCall(azione, extra) {
   const res = await fetch(db.endpoint, { method: 'POST', body: JSON.stringify({ admin: Object.assign({ password: adminPwd, azione }, extra || {}) }) });
   return res.json();
@@ -534,7 +594,7 @@ function adminLogin(msg) {
       adminPwd = String(fd.get('pwd') || '');
       busy('Controllo password');
       adminCall('leggi').then(out => {
-        if (out.ok) adminHome();
+        if (out.ok) { adminExtraCount = out.extraInAttesa || 0; adminHome(); }
         else if (out.error === 'nopass') { adminPwd = null; adminCreatePassword(); }
         else { adminPwd = null; adminLogin(out.msg || 'Errore.'); }
       }).catch(() => { adminPwd = null; adminLogin('Serve la connessione internet.'); });
@@ -566,6 +626,7 @@ function adminHome() {
     <div class="menu">
       <button class="btn ghost" value="sites">🏗️ Cantieri: aggiungi, togli, rinomina</button>
       <button class="btn ghost" value="report">📊 Report del mese: PDF, stampa, email, condividi</button>
+      <button class="btn ghost" value="extra">⏱️ Ore extra da autorizzare${adminExtraCount ? ` <span class="badge">${adminExtraCount}</span>` : ''}</button>
       <button class="btn ghost" value="shifts">✏️ Modifica timbrature dei dipendenti</button>
       <button class="btn ghost" value="pwd">🔑 Cambia password</button>
       <button class="btn ghost" value="logout">Esci dall'area responsabile</button>
@@ -576,6 +637,7 @@ function adminHome() {
       sites: () => call('leggi', null, 'Carico i cantieri', out => adminSites(out.cantieri)),
       report: adminReportPick,
       shifts: adminShiftsPick,
+      extra: () => call('extra', null, 'Carico le richieste', out => adminExtra(out.extra)),
       pwd: adminChangePassword,
       logout: () => { adminPwd = null; toast('Uscito dall\'area responsabile'); },
       forget: () => { adminPwd = null; db.adminDevice = false; save(); toast('Per rientrare: 5 tocchi veloci sul logo'); },
@@ -671,6 +733,29 @@ function printReport(r) {
   setTimeout(() => { window.print(); setTimeout(() => adminReport(r), 300); }, 100);
 }
 
+// --- Ore extra
+function adminExtra(list) {
+  adminExtraCount = list.length;
+  const h = n => fmtDur(n * 3600000);
+  openDialog(`
+    <h3>⏱️ Ore extra da autorizzare</h3>
+    ${list.length ? `<div class="adm-list">${list.map(x => `
+      <div class="extra-card">
+        <b>${esc(x.dip)}</b> · ${esc(x.cantiere)}<br>
+        <span>${x.start ? fmtDate(x.start) + ' · ' + fmtTime(x.start) : ''} → ${x.end ? fmtTime(x.end) : ''} · <b>+${h(x.extra)} extra</b></span><br>
+        <span>Motivo: ${esc(x.motivo || '—')}${x.nota ? ' – ' + esc(x.nota) : ''}</span>
+        <div class="row">
+          <button type="button" class="btn ghost" data-dec="no" data-id="${esc(x.id)}">Rifiuta</button>
+          <button type="button" class="btn" data-dec="ok" data-id="${esc(x.id)}">Autorizza</button>
+        </div>
+      </div>`).join('')}</div>` : '<p>Nessuna richiesta in attesa. 👍</p>'}
+    <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(adminHome, 50));
+  document.querySelectorAll('[data-dec]').forEach(b => {
+    b.onclick = () => call('decidi', { id: b.dataset.id, approva: b.dataset.dec === 'ok' }, 'Salvo',
+      out => { toast(b.dataset.dec === 'ok' ? 'Ore extra autorizzate ✓' : 'Ore extra non autorizzate'); adminExtra(out.extra); });
+  });
+}
+
 // --- Timbrature
 let adminShifts = null, adminSitesList = [];
 function adminShiftsPick() {
@@ -698,7 +783,7 @@ function adminShiftList(filter) {
     <div class="adm-list">${list.length ? list.map(t => `
       <button type="button" class="shift-row" data-sid="${esc(t.id)}">
         <b>${esc(t.dip)}</b> · ${esc(t.cantiere)}<br>
-        <span>${fmtDate(t.start)} · ${fmtTime(t.start)} → ${t.end ? fmtTime(t.end) + ' · ' + fmtDur(t.end - t.start) : '<em>in corso</em>'}</span>
+        <span>${fmtDate(t.start)} · ${fmtTime(t.start)} → ${t.end ? fmtTime(t.end) + ' · ' + fmtDur(t.end - t.start) : '<em>in corso</em>'}${t.extra ? ` · <b>+${fmtDur(t.extra * 3600000)} extra</b> (${esc(t.statoExtra || '')})` : ''}</span>
       </button>`).join('') : '<p>Nessuna timbratura.</p>'}</div>
     <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(adminHome, 50));
   $('#admWho').onchange = e => adminShiftList(e.target.value);

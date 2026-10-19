@@ -12,8 +12,20 @@ const ID_FOGLIO = 'INSERISCI_ID_FOGLIO';
 // Vuoto = l'email dell'account Google proprietario dello script.
 const EMAIL_RESPONSABILE = '';
 
+// Turno standard: ogni servizio (ingombranti) vale ORE_TURNO ore fisse.
+// Oltre ORE_TURNO + TOLLERANZA_MIN il dipendente deve giustificare: l'extra conta solo se autorizzato.
+const ORE_TURNO = 5;
+const TOLLERANZA_MIN = 15;
+// Chi autorizza le ore extra (riceve la richiesta su WhatsApp). Telefono con prefisso, senza + né spazi.
+const AUTORIZZA_NOME = 'INSERISCI_NOME';
+const AUTORIZZA_TELEFONO = 'INSERISCI_TELEFONO';
+
 const FOGLIO_TIMBRATURE = 'Timbrature';
-const INTESTAZIONE = ['ID', 'Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Ore', 'Stato', 'Telefono', 'Aggiornato'];
+const INTESTAZIONE = ['ID', 'Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Ore', 'Stato', 'Telefono', 'Aggiornato',
+  'Extra (ore)', 'Motivo extra', 'Nota extra', 'Stato extra'];
+// Indici (base 1) delle colonne extra
+const COL_EXTRA = 11, COL_MOTIVO = 12, COL_NOTA = 13, COL_STATO_EXTRA = 14;
+const EXTRA_ATTESA = 'Da autorizzare', EXTRA_OK = 'Autorizzato', EXTRA_NO = 'Non autorizzato';
 
 function ss_() { return SpreadsheetApp.openById(ID_FOGLIO); }
 
@@ -51,7 +63,13 @@ function doPost(e) {
 
 // Apri l'URL della web app nel browser per verificare che funzioni.
 function doGet(e) {
-  if (e && e.parameter && e.parameter.azione === 'cantieri') return json_({ ok: true, cantieri: cantieri_() });
+  if (e && e.parameter && e.parameter.azione === 'cantieri') {
+    return json_({ ok: true, cantieri: cantieri_(), config: {
+      oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN,
+      autorizzaNome: AUTORIZZA_NOME.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_NOME,
+      autorizzaTelefono: AUTORIZZA_TELEFONO.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_TELEFONO,
+    } });
+  }
   return json_({ ok: true, app: 'Timbra Cantieri' });
 }
 
@@ -117,13 +135,15 @@ function admin_(req) {
     case 'timbrature': return { ok: true, timbrature: timbratureMese_(anno, mese), cantieri: tuttiCantieri_() };
     case 'modifica': modificaTimbratura_(req.t); return { ok: true };
     case 'elimina': remove_(req.id); return { ok: true };
+    case 'extra': return { ok: true, extra: extraInAttesa_() };
+    case 'decidi': decidiExtra_(req.id, !!req.approva); return { ok: true, extra: extraInAttesa_() };
     case 'cambiapassword': {
       const nuova = String(req.nuova || '');
       if (nuova.length < 6) return { ok: false, msg: 'La password deve avere almeno 6 caratteri.' };
       props.setProperty('PASSWORD_ADMIN', nuova);
       return { ok: true };
     }
-    default: return { ok: true, cantieri: tuttiCantieri_() };
+    default: return { ok: true, cantieri: tuttiCantieri_(), extraInAttesa: extraInAttesa_().length };
   }
 }
 
@@ -140,7 +160,8 @@ function timbratureMese_(anno, mese) {
   return sh.getRange(2, 1, sh.getLastRow() - 1, INTESTAZIONE.length).getValues()
     .filter(r => r[4] instanceof Date && r[4] >= da && r[4] < a)
     .map(r => ({ id: String(r[0]), dip: String(r[1]), cantiere: String(r[3]),
-      start: r[4].getTime(), end: r[5] instanceof Date ? r[5].getTime() : null }))
+      start: r[4].getTime(), end: r[5] instanceof Date ? r[5].getTime() : null,
+      extra: Number(r[COL_EXTRA - 1]) || 0, statoExtra: String(r[COL_STATO_EXTRA - 1] || '') }))
     .sort((x, y) => y.start - x.start);
 }
 
@@ -203,6 +224,10 @@ function foglio_() {
     sh.getRange('G:G').setNumberFormat('0.00');
     sh.getRange('J:J').setNumberFormat('dd/mm/yyyy HH:mm');
   }
+  // Fogli creati con la versione precedente: aggiunge le colonne extra.
+  if (sh.getLastColumn() < INTESTAZIONE.length) {
+    sh.getRange(1, 1, 1, INTESTAZIONE.length).setValues([INTESTAZIONE]).setFontWeight('bold').setBackground('#e7f2ea');
+  }
   return sh;
 }
 
@@ -221,14 +246,48 @@ function upsert_(s, user) {
   const giorno = new Date(start.getFullYear(), start.getMonth(), start.getDate());
   const ore = s.end ? Math.round((s.end - s.start) / 36e5 * 100) / 100 : '';
   const nome = user && user.name ? user.name : 'Sconosciuto';
-  const row = [s.id, nome, giorno, s.site || '', start, end, ore, s.end ? 'Chiuso' : 'In corso', user && user.device || '', new Date()];
   let r = trovaRiga_(sh, s.id);
+  const prima = r ? sh.getRange(r, 1, 1, INTESTAZIONE.length).getValues()[0] : null;
+
+  // Ore extra oltre il turno standard
+  const minuti = s.end ? Math.round((s.end - s.start) / 60000) : 0;
+  const extraMin = minuti > ORE_TURNO * 60 + TOLLERANZA_MIN ? minuti - ORE_TURNO * 60 : 0;
+  const motivo = (s.extra && s.extra.motivo) || (prima && prima[COL_MOTIVO - 1]) || '';
+  const nota = (s.extra && s.extra.nota) || (prima && prima[COL_NOTA - 1]) || '';
+  let statoExtra = '';
+  if (extraMin) {
+    const vecchio = prima && prima[COL_STATO_EXTRA - 1];
+    const vecchiExtra = prima && Number(prima[COL_EXTRA - 1]);
+    // Una decisione del responsabile resta valida finché l'extra non cambia.
+    statoExtra = (vecchio === EXTRA_OK || vecchio === EXTRA_NO) && vecchiExtra === round2_(extraMin / 60) ? vecchio : EXTRA_ATTESA;
+  }
+
+  const row = [s.id, nome, giorno, s.site || '', start, end, ore, s.end ? 'Chiuso' : 'In corso', user && user.device || '', new Date(),
+    extraMin ? round2_(extraMin / 60) : '', extraMin ? motivo : '', extraMin ? nota : '', statoExtra];
   if (r) sh.getRange(r, 1, 1, row.length).setValues([row]);
   else { sh.appendRow(row); r = sh.getLastRow(); }
   sh.getRange(r, 3).setNumberFormat('dd/mm/yyyy');
   sh.getRange(r, 5, 1, 2).setNumberFormat('HH:mm');
   sh.getRange(r, 7).setNumberFormat('0.00');
   sh.getRange(r, 10).setNumberFormat('dd/mm/yyyy HH:mm');
+  sh.getRange(r, COL_EXTRA).setNumberFormat('0.00');
+}
+
+function extraInAttesa_() {
+  const sh = foglio_();
+  if (sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, INTESTAZIONE.length).getValues()
+    .filter(r => r[COL_STATO_EXTRA - 1] === EXTRA_ATTESA)
+    .map(r => ({ id: String(r[0]), dip: String(r[1]), cantiere: String(r[3]),
+      start: r[4] instanceof Date ? r[4].getTime() : null, end: r[5] instanceof Date ? r[5].getTime() : null,
+      extra: Number(r[COL_EXTRA - 1]) || 0, motivo: String(r[COL_MOTIVO - 1]), nota: String(r[COL_NOTA - 1]) }))
+    .sort((a, b) => a.start - b.start);
+}
+
+function decidiExtra_(id, ok) {
+  const sh = foglio_();
+  const r = trovaRiga_(sh, id);
+  if (r) sh.getRange(r, COL_STATO_EXTRA).setValue(ok ? EXTRA_OK : EXTRA_NO);
 }
 
 function remove_(id) {
@@ -271,29 +330,38 @@ function creaRiepilogo_(anno, mese) {
   const nomeMese = MESI[mese] + ' ' + anno;
   const dati = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, INTESTAZIONE.length).getValues() : [];
 
-  // dipendente -> { ore, giorni:Set, cantieri:{nome:ore}, aperti }
+  // Ogni turno chiuso vale ORE_TURNO ore fisse; gli extra contano solo se autorizzati.
   const perDip = {};
   const cantieri = new Set();
   dati.forEach(r => {
-    const [, dip, giorno, cantiere, , , ore, stato] = r;
+    const dip = r[1], giorno = r[2], cantiere = r[3], stato = r[7];
     if (!(giorno instanceof Date) || giorno < da || giorno >= a) return;
-    const p = perDip[dip] || (perDip[dip] = { ore: 0, giorni: new Set(), cantieri: {}, aperti: 0 });
+    const p = perDip[dip] || (perDip[dip] = { turni: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0 });
     if (stato !== 'Chiuso') { p.aperti++; return; }
-    p.ore += Number(ore) || 0;
+    p.turni++;
     p.giorni.add(giorno.getTime());
-    p.cantieri[cantiere] = (p.cantieri[cantiere] || 0) + (Number(ore) || 0);
+    p.cantieri[cantiere] = (p.cantieri[cantiere] || 0) + 1;
     cantieri.add(cantiere);
+    const extra = Number(r[COL_EXTRA - 1]) || 0;
+    const se = r[COL_STATO_EXTRA - 1];
+    if (se === EXTRA_OK) p.extraOk += extra;
+    else if (se === EXTRA_ATTESA) p.extraAttesa += extra;
+    else if (se === EXTRA_NO) p.extraNo += extra;
   });
 
   const listaCantieri = Array.from(cantieri).sort();
   const nomi = Object.keys(perDip).sort();
-  const intest = ['Dipendente', 'Giorni lavorati', 'Ore totali'].concat(listaCantieri).concat(['Turni non chiusi']);
+  const intest = ['Dipendente', 'Giorni', 'Turni', 'Ore turni (' + ORE_TURNO + 'h)', 'Extra autorizzati', 'TOTALE ORE',
+    'Extra da autorizzare', 'Extra non autorizzati', 'Turni non chiusi'].concat(listaCantieri.map(c => c + ' (turni)'));
   const righe = nomi.map(n => {
     const p = perDip[n];
-    return [n, p.giorni.size, round2_(p.ore)].concat(listaCantieri.map(c => round2_(p.cantieri[c] || 0))).concat([p.aperti]);
+    const base = p.turni * ORE_TURNO;
+    return [n, p.giorni.size, p.turni, base, round2_(p.extraOk), round2_(base + p.extraOk),
+      round2_(p.extraAttesa), round2_(p.extraNo), p.aperti].concat(listaCantieri.map(c => p.cantieri[c] || 0));
   });
-  const totale = ['TOTALE', '', round2_(righe.reduce((t, r) => t + r[2], 0))]
-    .concat(listaCantieri.map((c, i) => round2_(righe.reduce((t, r) => t + r[3 + i], 0)))).concat(['']);
+  const somma = i => round2_(righe.reduce((t, r) => t + (Number(r[i]) || 0), 0));
+  const totale = ['TOTALE', '', somma(2), somma(3), somma(4), somma(5), somma(6), somma(7), somma(8)]
+    .concat(listaCantieri.map((c, i) => somma(9 + i)));
 
   const titolo = 'Riepilogo ' + anno + '-' + ('0' + (mese + 1)).slice(-2);
   let out = ss.getSheetByName(titolo);
@@ -302,8 +370,8 @@ function creaRiepilogo_(anno, mese) {
   out.getRange(3, 1, 1, intest.length).setValues([intest]).setFontWeight('bold').setBackground('#e7f2ea');
   if (righe.length) out.getRange(4, 1, righe.length, intest.length).setValues(righe);
   out.getRange(4 + righe.length, 1, 1, intest.length).setValues([totale]).setFontWeight('bold');
-  out.getRange(4, 3, righe.length + 1, intest.length - 2).setNumberFormat('0.00');
-  out.getRange(4, intest.length, righe.length + 1, 1).setNumberFormat('0');
+  out.getRange(4, 4, righe.length + 1, 5).setNumberFormat('0.00');
+  out.getRange(3, 6, righe.length + 2, 1).setFontWeight('bold');
   out.setFrozenRows(3);
   out.autoResizeColumns(1, intest.length);
   
@@ -338,7 +406,9 @@ function inviaRiepilogo_(anno, mese) {
     subject: 'GE3CO – Ore del personale – ' + r.nomeMese,
     htmlBody: '<p>Riepilogo ore del personale di <b>' + r.nomeMese + '</b>.</p>' + tabella +
       '<p>Dettaglio di tutte le timbrature: <a href="' + link + '">apri il Google Sheet</a></p>' +
-      (r.righe.some(x => x[x.length - 1] > 0) ? '<p><b>Attenzione:</b> alcuni turni risultano non chiusi (uscita mancante).</p>' : ''),
+      '<p>Ogni turno vale ' + ORE_TURNO + ' ore; le ore extra contano solo se autorizzate.</p>' +
+      (r.righe.some(x => x[8] > 0) ? '<p><b>Attenzione:</b> alcuni turni risultano non chiusi (uscita mancante).</p>' : '') +
+      (r.righe.some(x => x[6] > 0) ? '<p><b>Attenzione:</b> ci sono ore extra ancora da autorizzare.</p>' : ''),
     attachments: [xlsx],
   });
 }
