@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 14;
+const APP_VERSION = 15;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -505,7 +505,8 @@ async function syncSites() {
     const byName = new Map(db.sites.map(s => [s.name, s]));
     const visible = names.map((name, i) => {
       const old = byName.get(name);
-      return { id: old ? old.id : uid() + i, name, color: old ? old.color : COLORS[i % COLORS.length] };
+      const color = (out.colori && out.colori[name]) || (old ? old.color : COLORS[i % COLORS.length]);
+      return { id: old ? old.id : uid() + i, name, color };
     });
     // Quelli tolti dal foglio restano nascosti per i nomi nel registro.
     const hidden = db.sites.filter(s => !names.includes(s.name)).map(s => Object.assign({}, s, { hidden: true }));
@@ -673,14 +674,26 @@ function adminHome() {
 }
 
 // --- Cantieri
+// Colori ben distinguibili tra loro, per riconoscere i comuni a colpo d'occhio
+const SITE_COLORS = ['#dc2626', '#ea580c', '#ca8a04', '#65a30d', '#16a34a', '#0d9488',
+  '#0891b2', '#2563eb', '#4f46e5', '#7c3aed', '#c026d3', '#db2777', '#78716c', '#1f2937'];
 function adminSites(list) {
-  const row = (c, i) => `<div class="adm-row">
-      <input name="n${i}" value="${esc(c.nome)}" maxlength="60" placeholder="Nome cantiere">
-      <label class="adm-on"><input type="checkbox" name="a${i}" ${c.attivo ? 'checked' : ''}> Attivo</label>
+  const localColor = nome => (db.sites.find(s => s.name === nome) || {}).color;
+  const row = (c, i) => {
+    const col = c.colore || localColor(c.nome) || SITE_COLORS[i % SITE_COLORS.length];
+    return `<div class="adm-site">
+      <div class="adm-row">
+        <button type="button" class="swatch" data-sw="${i}" style="background:${esc(col)}" aria-label="Scegli colore"></button>
+        <input type="hidden" name="c${i}" value="${esc(col)}">
+        <input name="n${i}" value="${esc(c.nome)}" maxlength="60" placeholder="Nome cantiere">
+        <label class="adm-on"><input type="checkbox" name="a${i}" ${c.attivo ? 'checked' : ''}> Attivo</label>
+      </div>
+      <div class="palette" id="pal${i}" hidden>${SITE_COLORS.map(x => `<button type="button" data-pick="${i}" data-col="${x}" style="background:${x}" aria-label="${x}"></button>`).join('')}</div>
     </div>`;
+  };
   openDialog(`
     <h3>🏗️ Cantieri</h3>
-    <p>Togli la spunta per nascondere un cantiere: le timbrature fatte restano. Per eliminarlo svuota il nome.</p>
+    <p>Tocca il pallino per cambiare colore. Togli la spunta per nascondere un cantiere: le timbrature fatte restano. Per eliminarlo svuota il nome.</p>
     <div class="adm-list" id="admList">${list.map(row).join('')}</div>
     <button type="button" class="btn ghost" id="admAdd">+ Aggiungi cantiere</button>
     <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn" value="save">Salva</button></div>`,
@@ -690,16 +703,31 @@ function adminSites(list) {
       const cantieri = [];
       for (let i = 0; i < n; i++) {
         const nome = String(fd.get('n' + i) || '').trim();
-        if (nome) cantieri.push({ nome, attivo: fd.get('a' + i) === 'on' });
+        if (nome) cantieri.push({ nome, attivo: fd.get('a' + i) === 'on', colore: String(fd.get('c' + i) || '') });
       }
       setTimeout(() => call('salva', { cantieri }, 'Salvo i cantieri', () => {
         toast('Cantieri salvati: arrivano su tutti i telefoni'); syncSites(); adminHome();
       }), 50);
     });
+  // Un solo listener per la lista: apre la tavolozza e applica il colore scelto
+  $('#admList').onclick = e => {
+    const sw = e.target.closest('[data-sw]');
+    if (sw) {
+      document.querySelectorAll('.palette').forEach(p => { if (p.id !== 'pal' + sw.dataset.sw) p.hidden = true; });
+      const pal = $('#pal' + sw.dataset.sw); pal.hidden = !pal.hidden; return;
+    }
+    const pk = e.target.closest('[data-pick]');
+    if (pk) {
+      const i = pk.dataset.pick;
+      document.querySelector(`[name="c${i}"]`).value = pk.dataset.col;
+      document.querySelector(`[data-sw="${i}"]`).style.background = pk.dataset.col;
+      $('#pal' + i).hidden = true;
+    }
+  };
   $('#admAdd').onclick = () => {
     const i = $('#admList').children.length;
     $('#admList').insertAdjacentHTML('beforeend', row({ nome: '', attivo: true }, i));
-    $('#admList').lastElementChild.querySelector('input').focus();
+    $('#admList').lastElementChild.querySelector('input[name^="n"]').focus();
   };
 }
 

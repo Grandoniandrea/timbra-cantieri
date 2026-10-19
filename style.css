@@ -187,3 +187,8 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .bar span { display: block; height: 100%; width: 0; background: var(--brand); transition: width .5s; }
 .bar span.over { background: #d97706; }
 .danger-text { color: var(--danger) !important; }
+.adm-site { display: grid; gap: 6px; }
+.swatch { width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--card); box-shadow: 0 0 0 1px var(--line); flex: none; cursor: pointer; }
+.palette { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.palette button { width: 32px; height: 32px; border-radius: 50%; border: 0; cursor: pointer; }
+.palette button:focus-visible, .swatch:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }

@@ -64,7 +64,7 @@ function doPost(e) {
 // Apri l'URL della web app nel browser per verificare che funzioni.
 function doGet(e) {
   if (e && e.parameter && e.parameter.azione === 'cantieri') {
-    return json_({ ok: true, cantieri: cantieri_(), config: {
+    return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), config: {
       oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN,
       autorizzaNome: AUTORIZZA_NOME.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_NOME,
       autorizzaTelefono: AUTORIZZA_TELEFONO.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_TELEFONO,
@@ -92,6 +92,9 @@ function foglioCantieri_() {
     sh.setColumnWidth(1, 260);
     sh.getRange('D1').setValue('Scrivi un cantiere per riga. "NO" in Attivo lo nasconde dall\'app senza perdere le timbrature.')
       .setFontStyle('italic').setFontColor('#6b766e');
+  }
+  if (sh.getRange(1, 3).getValue() !== 'Colore') {
+    sh.getRange(1, 3).setValue('Colore').setFontWeight('bold').setBackground('#e7f2ea');
   }
   return sh;
 }
@@ -180,9 +183,9 @@ function modificaTimbratura_(t) {
 function tuttiCantieri_() {
   const sh = foglioCantieri_();
   if (sh.getLastRow() < 2) return [];
-  return sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues()
+  return sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues()
     .filter(r => String(r[0]).trim())
-    .map(r => ({ nome: String(r[0]).trim().toUpperCase(), attivo: String(r[1]).trim().toUpperCase() !== 'NO' }));
+    .map(r => ({ nome: String(r[0]).trim().toUpperCase(), attivo: String(r[1]).trim().toUpperCase() !== 'NO', colore: coloreValido_(r[2]) }));
 }
 
 function salvaCantieri_(lista) {
@@ -193,11 +196,27 @@ function salvaCantieri_(lista) {
     const nome = String(c && c.nome || '').trim().toUpperCase().slice(0, 60);
     if (!nome || visti[nome]) return;
     visti[nome] = true;
-    righe.push([nome, c.attivo === false ? 'NO' : 'SI']);
+    righe.push([nome, c.attivo === false ? 'NO' : 'SI', coloreValido_(c.colore)]);
   });
   const sh = foglioCantieri_();
-  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 2).clearContent();
-  if (righe.length) sh.getRange(2, 1, righe.length, 2).setValues(righe);
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 3).clearContent().setBackground(null);
+  if (righe.length) {
+    sh.getRange(2, 1, righe.length, 3).setValues(righe);
+    // Colora la cella così il colore si vede anche nel foglio
+    sh.getRange(2, 3, righe.length, 1).setBackgrounds(righe.map(r => [r[2] || null]));
+  }
+}
+
+function coloreValido_(c) {
+  const v = String(c || '').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : '';
+}
+
+/** Colori scelti dal responsabile, per nome cantiere (solo quelli impostati). */
+function colori_() {
+  const out = {};
+  tuttiCantieri_().forEach(c => { if (c.colore) out[c.nome] = c.colore; });
+  return out;
 }
 
 function cantieri_() {
