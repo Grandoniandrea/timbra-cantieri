@@ -124,6 +124,9 @@ function render() {
   const managed = !!db.endpoint;
   $('#btnAddSite').hidden = managed;
   $('#sitesNote').hidden = !managed;
+  $('#foot').textContent = managed
+    ? 'Le timbrature vengono inviate al registro aziendale.'
+    : 'I dati restano su questo telefono. Fai un backup ogni tanto dal menu ⋯';
   const shown = db.sites.filter(s => !s.hidden);
   $('#sites').innerHTML = shown.length ? shown.map(s => {
     const here = db.active && db.active.siteId === s.id;
@@ -339,6 +342,7 @@ $('#btnMenu').onclick = () => openDialog(`
     <button class="btn ghost" value="backup">💾 Salva backup completo</button>
     <button class="btn ghost" value="restore">♻︎ Ripristina da backup</button>
     <button class="btn ghost" value="nfc">🏷️ Link da scrivere sul tag NFC</button>
+    ${db.endpoint ? '<button class="btn ghost" value="admin">🔒 Gestisci cantieri (responsabile)</button>' : ''}
     <button class="btn ghost" value="">Chiudi</button>
   </div>`, action => {
   if (action === 'share') shareMonth();
@@ -347,6 +351,7 @@ $('#btnMenu').onclick = () => openDialog(`
   if (action === 'backup') download(`timbra-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(db, null, 2), 'application/json');
   if (action === 'restore') importBackup();
   if (action === 'nfc') setTimeout(showNfcLink, 50);
+  if (action === 'admin') setTimeout(adminLogin, 50);
 });
 function showNfcLink() {
   const link = location.origin + location.pathname + '?nfc=1';
@@ -460,6 +465,56 @@ async function syncSites() {
     const next = visible.concat(hidden.filter(h => !visible.some(v => v.id === h.id)));
     if (JSON.stringify(next) !== JSON.stringify(db.sites)) { db.sites = next; save(); }
   } catch (e) { /* offline: si tengono i cantieri già scaricati */ }
+}
+
+// ---------- Gestione cantieri (solo responsabile, password verificata dallo script) ----------
+let adminPwd = null; // solo in memoria: chiusa l'app, la password va reinserita
+async function adminCall(azione, cantieri) {
+  const res = await fetch(db.endpoint, { method: 'POST', body: JSON.stringify({ admin: { password: adminPwd, azione, cantieri } }) });
+  return res.json();
+}
+function adminLogin(msg) {
+  openDialog(`
+    <h3>🔒 Gestione cantieri</h3>
+    <p>${esc(msg || 'Riservato al responsabile.')}</p>
+    <label>Password<input type="password" name="pwd" required autocomplete="current-password"></label>
+    <div class="row"><button class="btn ghost" value="" formnovalidate>Annulla</button><button class="btn" value="ok">Entra</button></div>`,
+    (a, fd) => {
+      adminPwd = String(fd.get('pwd') || '');
+      adminCall('leggi').then(out => {
+        if (out.ok) adminEditor(out.cantieri);
+        else { adminPwd = null; adminLogin(out.msg || 'Errore.'); }
+      }).catch(() => { adminPwd = null; adminLogin('Serve la connessione internet.'); });
+    });
+}
+function adminEditor(list) {
+  const row = (c, i) => `<div class="adm-row">
+      <input name="n${i}" value="${esc(c.nome)}" maxlength="60" placeholder="Nome cantiere">
+      <label class="adm-on"><input type="checkbox" name="a${i}" ${c.attivo ? 'checked' : ''}> Attivo</label>
+    </div>`;
+  openDialog(`
+    <h3>Cantieri</h3>
+    <p>Togli la spunta per nascondere un cantiere: le timbrature fatte restano. Per eliminarlo svuota il nome.</p>
+    <div class="adm-list" id="admList">${list.map(row).join('')}</div>
+    <button type="button" class="btn ghost" id="admAdd">+ Aggiungi cantiere</button>
+    <div class="row"><button class="btn ghost" value="" formnovalidate>Annulla</button><button class="btn" value="save">Salva</button></div>`,
+    (a, fd) => {
+      const n = $('#admList').children.length;
+      const cantieri = [];
+      for (let i = 0; i < n; i++) {
+        const nome = String(fd.get('n' + i) || '').trim();
+        if (nome) cantieri.push({ nome, attivo: fd.get('a' + i) === 'on' });
+      }
+      adminCall('salva', cantieri).then(out => {
+        if (out.ok) { toast('Cantieri salvati: arrivano su tutti i telefoni'); syncSites(); }
+        else alert(out.msg || 'Errore nel salvataggio.');
+      }).catch(() => alert('Serve la connessione internet.'));
+    });
+  $('#admAdd').onclick = () => {
+    const i = $('#admList').children.length;
+    $('#admList').insertAdjacentHTML('beforeend', row({ nome: '', attivo: true }, i));
+    $('#admList').lastElementChild.querySelector('input').focus();
+  };
 }
 
 // Link di collegamento che il responsabile manda ai dipendenti: ...?collega=<URL web app>

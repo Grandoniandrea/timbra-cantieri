@@ -33,6 +33,7 @@ function doPost(e) {
   lock.waitLock(20000);
   try {
     const body = JSON.parse(e.postData.contents);
+    if (body.admin) return json_(admin_(body.admin));
     const ops = Array.isArray(body.ops) ? body.ops : [];
     const ok = [];
     ops.forEach(op => {
@@ -74,6 +75,47 @@ function foglioCantieri_() {
       .setFontStyle('italic').setFontColor('#6b766e');
   }
   return sh;
+}
+
+// ---------- Gestione cantieri dall'app (protetta da password) ----------
+// La password si imposta in Impostazioni progetto → Proprietà script → PASSWORD_ADMIN.
+
+function admin_(req) {
+  const cache = CacheService.getScriptCache();
+  const tentativi = Number(cache.get('tentativi_admin') || 0);
+  if (tentativi >= 5) return { ok: false, error: 'bloccato', msg: 'Troppi tentativi sbagliati. Riprova tra 15 minuti.' };
+  const giusta = PropertiesService.getScriptProperties().getProperty('PASSWORD_ADMIN');
+  if (!giusta) return { ok: false, error: 'nopass', msg: 'Password non ancora impostata nello script.' };
+  if (String(req.password || '') !== giusta) {
+    cache.put('tentativi_admin', String(tentativi + 1), 900);
+    return { ok: false, error: 'password', msg: 'Password sbagliata.' };
+  }
+  cache.remove('tentativi_admin');
+  if (req.azione === 'salva') salvaCantieri_(req.cantieri);
+  return { ok: true, cantieri: tuttiCantieri_() };
+}
+
+function tuttiCantieri_() {
+  const sh = foglioCantieri_();
+  if (sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues()
+    .filter(r => String(r[0]).trim())
+    .map(r => ({ nome: String(r[0]).trim().toUpperCase(), attivo: String(r[1]).trim().toUpperCase() !== 'NO' }));
+}
+
+function salvaCantieri_(lista) {
+  if (!Array.isArray(lista)) return;
+  const righe = [];
+  const visti = {};
+  lista.forEach(c => {
+    const nome = String(c && c.nome || '').trim().toUpperCase().slice(0, 60);
+    if (!nome || visti[nome]) return;
+    visti[nome] = true;
+    righe.push([nome, c.attivo === false ? 'NO' : 'SI']);
+  });
+  const sh = foglioCantieri_();
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 2).clearContent();
+  if (righe.length) sh.getRange(2, 1, righe.length, 2).setValues(righe);
 }
 
 function cantieri_() {

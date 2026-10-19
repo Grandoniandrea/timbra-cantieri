@@ -142,3 +142,8 @@ dialog input, dialog select {
 .foot { text-align: center; font-size: 13px; color: var(--muted); }
 .note { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
 .btn[hidden], .note[hidden] { display: none; }
+.adm-list { display: grid; gap: 8px; max-height: 50vh; overflow: auto; }
+.adm-row { display: flex; gap: 8px; align-items: center; }
+.adm-row > input { flex: 1; min-width: 0; }
+.adm-on { display: flex !important; align-items: center; gap: 6px; font-weight: 500 !important; white-space: nowrap; }
+.adm-on input { width: 22px; min-height: 22px; height: 22px; }
