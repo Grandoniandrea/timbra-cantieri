@@ -10,7 +10,7 @@ App per le timbrature di cantiere, ottimizzata per telefono e con supporto ai ta
 
 ## Tag NFC
 Scrivi sul tag (app **NFC Tools** → Scrivi → URL/URI) il link mostrato in Menu ⋯ → *Link da scrivere sul tag NFC*:
-`https://<utente>.github.io/timbra-cantieri/?nfc=1`
+`https://grandoniandrea.github.io/timbra-cantieri/?nfc=1`
 
 ## Dati
 I dati restano nel browser del telefono (localStorage). Fai un backup ogni tanto dal menu.
