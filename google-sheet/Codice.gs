@@ -2,7 +2,7 @@
  * Timbra Cantieri – raccolta timbrature su Google Sheet + riepilogo mensile.
  *
  * Installazione: vedi GUIDA-GOOGLE-SHEET.md nel repository.
- * Unica cosa da modificare: EMAIL_RESPONSABILE qui sotto.
+ * Da impostare: ID_FOGLIO (ed eventualmente EMAIL_RESPONSABILE) qui sotto.
  */
 
 // ID del Google Sheet: la parte dell'indirizzo tra /d/ e /edit.
