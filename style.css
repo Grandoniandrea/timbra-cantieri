@@ -168,3 +168,6 @@ dialog input, dialog select {
   #printArea h1 { font-size: 20px; margin: 12px 0; }
   .print-foot { font-size: 11px; color: #555; }
 }
+/* Niente zoom col doppio tocco (serve per i tocchi sul logo) */
+html, button, .logo { touch-action: manipulation; }
+.logo { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-user-drag: none; cursor: pointer; }

@@ -365,16 +365,24 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
   if (action === 'admin') setTimeout(adminLogin, 50);
 });
 
-// Accesso nascosto all'area responsabile: 5 tocchi veloci sul logo.
-let logoTaps = [];
-$('.logo').addEventListener('click', () => {
-  const now = Date.now();
-  logoTaps = logoTaps.filter(t => now - t < 3000).concat(now);
-  if (logoTaps.length < 5) return;
+// Accesso nascosto all'area responsabile: 5 tocchi veloci sul logo, oppure tenerlo premuto 2 secondi.
+let logoTaps = [], logoHold;
+function openAdminFromLogo() {
   logoTaps = [];
   if (!db.endpoint) return toast('Telefono non collegato al registro aziendale');
+  if (navigator.vibrate) navigator.vibrate(30);
   adminLogin();
+}
+const logo = $('.logo');
+logo.addEventListener('click', () => {
+  const now = Date.now();
+  logoTaps = logoTaps.filter(t => now - t < 4000).concat(now);
+  if (logoTaps.length >= 5) openAdminFromLogo();
 });
+logo.addEventListener('pointerdown', () => { logoHold = setTimeout(openAdminFromLogo, 2000); });
+['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => logo.addEventListener(ev, () => clearTimeout(logoHold)));
+logo.addEventListener('contextmenu', e => e.preventDefault());
+logo.draggable = false;
 function showNfcLink() {
   const link = location.origin + location.pathname + '?nfc=1';
   openDialog(`
