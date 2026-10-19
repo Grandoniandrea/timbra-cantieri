@@ -9,7 +9,8 @@
 const ID_FOGLIO = 'INSERISCI_ID_FOGLIO';
 
 // Chi riceve il riepilogo a inizio mese (più indirizzi separati da virgola).
-const EMAIL_RESPONSABILE = 'responsabile@esempio.it';
+// Vuoto = l'email dell'account Google proprietario dello script.
+const EMAIL_RESPONSABILE = '';
 
 const FOGLIO_TIMBRATURE = 'Timbrature';
 const INTESTAZIONE = ['ID', 'Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Ore', 'Stato', 'Telefono', 'Aggiornato'];
@@ -88,9 +89,13 @@ function upsert_(s, user) {
   const ore = s.end ? Math.round((s.end - s.start) / 36e5 * 100) / 100 : '';
   const nome = user && user.name ? user.name : 'Sconosciuto';
   const row = [s.id, nome, giorno, s.site || '', start, end, ore, s.end ? 'Chiuso' : 'In corso', user && user.device || '', new Date()];
-  const r = trovaRiga_(sh, s.id);
+  let r = trovaRiga_(sh, s.id);
   if (r) sh.getRange(r, 1, 1, row.length).setValues([row]);
-  else sh.appendRow(row);
+  else { sh.appendRow(row); r = sh.getLastRow(); }
+  sh.getRange(r, 3).setNumberFormat('dd/mm/yyyy');
+  sh.getRange(r, 5, 1, 2).setNumberFormat('HH:mm');
+  sh.getRange(r, 7).setNumberFormat('0.00');
+  sh.getRange(r, 10).setNumberFormat('dd/mm/yyyy HH:mm');
 }
 
 function remove_(id) {
@@ -192,7 +197,7 @@ function inviaRiepilogoMeseScorso() {
     .getBlob().setName(r.titolo + '.xlsx');
 
   MailApp.sendEmail({
-    to: EMAIL_RESPONSABILE,
+    to: EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail(),
     subject: 'GE3CO – Ore del personale – ' + r.nomeMese,
     htmlBody: '<p>Riepilogo ore del personale di <b>' + r.nomeMese + '</b>.</p>' + tabella +
       '<p>Dettaglio di tutte le timbrature: <a href="' + link + '">apri il Google Sheet</a></p>' +
