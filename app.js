@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 38;
+const APP_VERSION = 39;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -804,11 +804,12 @@ async function syncPlan() {
     if (JSON.stringify(next.squadre) !== JSON.stringify((db.plan || {}).squadre)) { db.plan = next; save(); render(); }
   } catch (e) { /* offline o script da aggiornare: resta il programma già scaricato */ }
 }
+// Nel programma un operatore può essere scritto con nome e cognome o solo col cognome (come nel foglio di Ciulli)
+const isMe = o => !!db.user && [fullName(), db.user.last, `${db.user.last} ${db.user.first}`].some(n => sameName(o, n));
 function myPlan() {
   if (!db.plan || !db.user) return [];
-  const me = fullName();
   const oggi = isoDay(new Date());
-  return db.plan.squadre.filter(s => s.data >= oggi && s.operatori.some(o => sameName(o, me)));
+  return db.plan.squadre.filter(s => s.data >= oggi && s.operatori.some(isMe));
 }
 function renderPlan() {
   const box = $('#plan');
@@ -822,13 +823,13 @@ function renderPlan() {
   const when = d => d === oggi ? 'Oggi' : d === domani ? 'Domani' : dayLabel(d);
   const rows = mine.slice(0, 4).map(s => {
     const t = turnoInfo(s.turno);
-    const altri = s.operatori.filter(o => !sameName(o, me));
+    const altri = s.operatori.filter(o => !isMe(o));
     const site = db.sites.find(x => x.name === s.cantiere);
     return `<li>
       <span class="dot" style="background:${esc(site ? site.color : 'var(--brand)')}"></span>
       <div class="grow"><b>${esc(when(s.data))} · ${esc(t.nome)} ${esc(t.orario)}</b>
         <span>${esc(s.cantiere)}${altri.length ? ' · con ' + esc(altri.join(', ')) : ''}${s.nota ? ' · ' + esc(s.nota) : ''}</span></div>
-      ${isD(s.data, me) ? '<span class="pill doppio">Doppio</span>' : ''}
+      ${isD(s.data, s.operatori.find(isMe) || me) ? '<span class="pill doppio">Doppio</span>' : ''}
     </li>`;
   });
   box.innerHTML = `<div class="sec-head"><div><small>IL TUO PROGRAMMA</small><h2>Prossimi turni</h2></div></div>
@@ -949,14 +950,17 @@ function planPeopleEdit() {
     <h3>👥 Operatori</h3>
     <p class="note">Chi è spuntato compare nel programma. Chi ha già timbrato c'è già.</p>
     <div class="plan-people">${planPeople.map((p, i) => `<label class="pp"><input type="checkbox" name="on" value="${i}" ${p.attivo !== false ? 'checked' : ''}><span>${esc(p.nome)}</span></label>`).join('')}</div>
-    <label>Aggiungi operatore (nome e cognome)<input name="nuovo" maxlength="60" placeholder="es. Mario Rossi" autocomplete="off"></label>
+    <label>Aggiungi operatori (uno per riga o separati da virgola)<textarea name="nuovo" rows="3" placeholder="es. Rossi&#10;Bianchi&#10;Mario Verdi"></textarea></label>
     <div class="row"><button class="btn ghost" value="cancel" formnovalidate>Indietro</button><button class="btn" value="ok">Salva</button></div>`, (a, fd) => {
     if (a === 'cancel') return setTimeout(planView, 50);
     const on = new Set(fd.getAll('on').map(Number));
     const lista = planPeople.map((p, i) => ({ nome: p.nome, attivo: on.has(i) }));
     const cap = v => String(v || '').trim().replace(/\s+/g, ' ').replace(/(^|[\s'-])\S/g, c => c.toUpperCase());
-    const nuovo = cap(fd.get('nuovo'));
-    if (nuovo && !lista.some(p => sameName(p.nome, nuovo))) lista.push({ nome: nuovo, attivo: true });
+    String(fd.get('nuovo') || '').split(/[\n,;]+/).map(v => cap(String(v).toLowerCase())).filter(Boolean).forEach(nuovo => {
+      // Un cognome già presente come "Nome Cognome" non si duplica
+      const giaC = lista.some(p => sameName(p.nome, nuovo) || sameName(p.nome.split(' ').slice(-1)[0], nuovo));
+      if (!giaC) lista.push({ nome: nuovo, attivo: true });
+    });
     setTimeout(() => call('operatori', { operatori: lista }, 'Salvo gli operatori', out => {
       planPeople = out.operatori || lista; toast('Operatori salvati ✓'); planView();
     }), 50);
