@@ -325,3 +325,23 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 @page { size: A4 portrait; margin: 10mm; }
 .mod-cal { display: flex !important; align-items: center; gap: 10px; font-weight: 700; }
 .mod-cal input { flex: 1; }
+
+/* Programma in PDF */
+.plan-doc { color: #000; background: #fff; font-family: Arial, Helvetica, sans-serif; font-size: 12px; padding: 4px; }
+.pd-head { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
+.pd-head img { width: 140px; height: auto; }
+.pd-head h1 { font-size: 18px; margin: 0; }
+.pd-head p { margin: 2px 0 0; font-size: 12px; }
+.pd-t { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.pd-t th, .pd-t td { border: 1px solid #000; padding: 5px 6px; vertical-align: top; text-align: left; }
+.pd-t thead th { background: #e7f2ea; font-size: 11px; text-align: center; }
+.pd-t thead th:first-child { background: none; border: 0; }
+.pd-day { text-transform: capitalize; font-size: 12px; background: #f4f6f3; }
+.pd-day small { display: block; font-weight: 400; font-size: 11px; }
+.pp-sq { display: flex; flex-wrap: wrap; gap: 3px 5px; align-items: baseline; padding: 3px 0; border-bottom: 1px dotted #999; }
+.pp-sq:last-child { border-bottom: 0; }
+.pp-sq b { font-size: 11px; margin-right: 4px; }
+.pp-sq i { width: 100%; font-size: 10px; color: #444; }
+.pp-n { background: #fff7c2; border: 1px solid #e5d36a; border-radius: 3px; padding: 0 4px; font-size: 11px; }
+.pp-n.pp-d { background: #f8b4b0; border-color: #d9534f; font-weight: 700; }
+.pd-note { font-size: 10px; margin: 8px 0 0; }

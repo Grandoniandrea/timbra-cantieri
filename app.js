@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 40;
+const APP_VERSION = 41;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -877,6 +877,7 @@ function planView() {
     <p class="note"><span class="nm doppio">Nome</span> = doppio turno quel giorno.</p>
     <div class="menu">
       <button class="btn" value="save">💾 Salva il programma</button>
+      <div class="row"><button class="btn ghost" value="pdf" formnovalidate>📄 PDF / stampa</button><button class="btn ghost" value="sharepdf" formnovalidate>📤 Condividi</button></div>
       <button class="btn ghost" value="copy" formnovalidate>📋 Copia la settimana prima</button>
       <button class="btn ghost" value="people" formnovalidate>👥 Operatori</button>
       <button class="btn ghost" value="back" formnovalidate>Indietro</button>
@@ -889,6 +890,8 @@ function planView() {
       planSquads = out.squadre || planSquads; planDirty = false; toast('Programma salvato ✓'); planView();
     }), 50);
     if (a === 'copy') return setTimeout(planCopyPrev, 50);
+    if (a === 'pdf') return setTimeout(planPrint, 50);
+    if (a === 'sharepdf') return setTimeout(planSharePdf, 50);
     if (a === 'people') return setTimeout(planPeopleEdit, 50);
     if (a === 'back') {
       if (planDirty && !confirm('Ci sono modifiche non salvate. Uscire e perderle?')) return setTimeout(planView, 50);
@@ -896,6 +899,73 @@ function planView() {
     }
     if (a.startsWith('add:')) { const [, d, t] = a.split(':'); return setTimeout(() => planSquadEdit(null, d, t), 50); }
     if (a.startsWith('edit:')) return setTimeout(() => planSquadEdit(a.slice(5)), 50);
+  });
+}
+// Programma in PDF: una riga per giorno, mattina e pomeriggio, doppio turno in rosso
+function planDoc() {
+  const isD = doppi(planSquads);
+  const fine = addDays(planWeek, 6);
+  const dmy = iso => dayFromIso(iso).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const days = [0, 1, 2, 3, 4, 5, 6].map(i => addDays(planWeek, i));
+  const cell = (d, t) => planSquads.filter(x => x.data === d && x.turno === t).map(x => `<div class="pp-sq">
+      <b>${esc(x.cantiere)}</b>${x.operatori.map(o => `<span class="${isD(d, o) ? 'pp-n pp-d' : 'pp-n'}">${esc(o)}</span>`).join('')}${x.nota ? `<i>${esc(x.nota)}</i>` : ''}</div>`).join('') || '';
+  return `<div class="plan-doc">
+    <div class="pd-head"><img src="logo.png" alt="GE3CO"><div><h1>Programma ingombranti</h1>
+      <p>Settimana dal <b>${dmy(planWeek)}</b> al <b>${dmy(fine)}</b></p></div></div>
+    <table class="pd-t">
+      <colgroup><col style="width:16%"><col style="width:42%"><col style="width:42%"></colgroup>
+      <thead><tr><th></th>${PLAN_TURNI.map(t => `<th>${t.nome.toUpperCase()} ${t.orario.replace('–', '.00 – ')}.00</th>`).join('')}</tr></thead>
+      <tbody>${days.map(d => `<tr><th class="pd-day">${esc(dayFromIso(d).toLocaleDateString('it-IT', { weekday: 'long' }))}<small>${dayFromIso(d).getDate()}</small></th>
+        ${PLAN_TURNI.map(t => `<td>${cell(d, t.nome)}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table>
+    <p class="pd-note"><span class="pp-n pp-d">Nome</span> = doppio turno · Ogni turno vale ${cfg().oreTurno} ore · Dove non è indicato il cantiere vale PISA</p>
+  </div>`;
+}
+function planPrint() {
+  $('#printArea').innerHTML = planDoc();
+  document.body.classList.add('print-modulo');
+  const imgs = [...document.querySelectorAll('#printArea img')];
+  Promise.all(imgs.map(i => i.complete ? null : new Promise(ok => { i.onload = i.onerror = ok; setTimeout(ok, 3000); }))).then(() => {
+    window.print();
+    setTimeout(() => { document.body.classList.remove('print-modulo'); planView(); }, 300);
+  });
+}
+async function planSharePdf() {
+  busy('Preparo il PDF');
+  const nome = `Programma ingombranti ${dayFromIso(planWeek).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' }).replace('/', '-')}.pdf`;
+  let file;
+  try {
+    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;left:-10000px;top:0;width:760px;background:#fff';
+    box.innerHTML = planDoc();
+    document.body.appendChild(box);
+    try {
+      await Promise.all([...box.querySelectorAll('img')].map(i => i.complete ? null : new Promise(ok => { i.onload = i.onerror = ok; setTimeout(ok, 3000); })));
+      const c = await window.html2canvas(box.firstElementChild, { scale: 2, backgroundColor: '#ffffff' });
+      const pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const w = 190, h = Math.min(277, c.height * w / c.width);
+      pdf.addImage(c.toDataURL('image/jpeg', 0.92), 'JPEG', 10, 10, h < 277 ? w : 277 * c.width / c.height, h);
+      file = new File([pdf.output('blob')], nome, { type: 'application/pdf' });
+    } finally { box.remove(); }
+  } catch (e) {
+    return openDialog('<h3>Errore</h3><p>Non riesco a creare il PDF: serve la connessione. Puoi usare "PDF / stampa".</p><button class="btn" value="back">Indietro</button>', () => setTimeout(planView, 50));
+  }
+  openDialog(`<h3>📤 Condividi il programma</h3><p>${esc(nome)}</p>
+    <p class="note">Si apre la condivisione: scegli WhatsApp (anche un gruppo) o Mail.</p>
+    <button class="btn" value="share">📤 Condividi il PDF</button>
+    <button class="btn ghost" value="back">Indietro</button>`, async a => {
+    if (a === 'share') {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: nome }); } catch (e) { /* annullato */ }
+      } else {
+        const url = URL.createObjectURL(file);
+        const l = document.createElement('a'); l.href = url; l.download = nome; document.body.appendChild(l); l.click(); l.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }
+    }
+    setTimeout(planView, 300);
   });
 }
 function planSquadEdit(id, data, turno) {
