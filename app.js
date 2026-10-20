@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 34;
+const APP_VERSION = 35;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -446,6 +446,7 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
     <button class="btn" value="share">📤 Invia le mie timbrature al responsabile (WhatsApp)</button>
     <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia</button>
     <button class="btn ghost" value="paga">💶 Stima busta paga</button>
+    <button class="btn ghost" value="modulo">📝 Modulo ore settimanale</button>
     <button class="btn ghost" value="csv">⬇︎ Scarica le mie timbrature (Excel)</button>
     <button class="btn ghost" value="">Chiudi</button>
   </div>` : `
@@ -456,6 +457,7 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
     <button class="btn ghost" value="share">📤 Invia timbrature del mese</button>
     <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia</button>
     <button class="btn ghost" value="paga">💶 Stima busta paga</button>
+    <button class="btn ghost" value="modulo">📝 Modulo ore settimanale</button>
     <button class="btn ghost" value="csv">⬇︎ Esporta tutte le timbrature (Excel)</button>
     <button class="btn ghost" value="profile">👤 Cambia nome e cognome</button>
     <button class="btn ghost" value="backup">💾 Salva backup completo</button>
@@ -466,6 +468,7 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
   if (action === 'share') shareMonth();
   if (action === 'assenze') setTimeout(myAbsences, 50);
   if (action === 'paga') setTimeout(payPick, 50);
+  if (action === 'modulo') setTimeout(modPick, 50);
   if (action === 'csv') exportCsv();
   if (action === 'profile') setTimeout(() => editProfile(), 50);
   if (action === 'backup') download(`timbra-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(db, null, 2), 'application/json');
@@ -956,6 +959,115 @@ function planPeopleEdit() {
       planPeople = out.operatori || lista; toast('Operatori salvati ✓'); planView();
     }), 50);
   });
+}
+
+// ---------- Modulo ore settimanale (modello cartaceo GE3CO) ----------
+// Compila il modulo "Settimana DAL … AL …" con le timbrature del telefono: un blocco per cantiere,
+// ora inizio / ora fine / totale per ogni giorno. Se i cantieri sono più di 4 si aggiunge un secondo modulo.
+const MOD_GIORNI = ['LUN', 'MAR', 'MER', 'GIO', 'VEN', 'SAB', 'DOM'];
+const MOD_BLOCCHI = 4;
+const hm = ms => { const m = Math.round(ms / 60000); return `${Math.floor(m / 60)}:${pad(m % 60)}`; };
+let modWeek = null;
+function modPick() {
+  const m = db.modulo || {};
+  // Si consegna il martedì per la settimana prima: di default la settimana scorsa
+  const def = modWeek || addDays(mondayOf(new Date()), -7);
+  openDialog(`
+    <h3>📝 Modulo ore settimanale</h3>
+    <p>${esc(fullName() || 'Operatore')}</p>
+    <label>Settimana dal (lunedì)<input type="date" name="dal" required value="${def}"></label>
+    <label>Tipologia intervento<input name="tipo" maxlength="30" value="${esc(m.tipo || 'Ingombranti')}"></label>
+    <label>Prima del cantiere (facoltativo)<input name="pref" maxlength="20" value="${esc(m.pref || '')}" placeholder="es. Geofor → Geofor Cascina"></label>
+    <button class="btn" value="gen">Genera modulo</button>
+    <button class="btn ghost" value="" formnovalidate>Chiudi</button>`, (a, fd) => {
+    if (a !== 'gen') return;
+    const dal = String(fd.get('dal') || def);
+    modWeek = mondayOf(dayFromIso(dal));
+    db.modulo = { tipo: String(fd.get('tipo') || '').trim(), pref: String(fd.get('pref') || '').trim() };
+    save();
+    setTimeout(() => modShow(modWeek), 50);
+  });
+}
+function modBlocks(week) {
+  const da = dayFromIso(week).getTime(), a = dayFromIso(addDays(week, 7)).getTime();
+  const shifts = db.shifts.filter(s => s.end && s.start >= da && s.start < a).sort((x, y) => x.start - y.start);
+  const blocks = [];
+  shifts.forEach(s => {
+    const name = siteById(s.siteId).name;
+    const day = (new Date(s.start).getDay() + 6) % 7;
+    let b = blocks.find(x => x.cantiere === name && !x.giorni[day]);
+    if (!b) { b = { cantiere: name, giorni: [] }; blocks.push(b); }
+    b.giorni[day] = s;
+  });
+  return { blocks, shifts };
+}
+function modDoc(week) {
+  const m = db.modulo || {};
+  const { blocks, shifts } = modBlocks(week);
+  const fine = addDays(week, 6);
+  const dmy = iso => dayFromIso(iso).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const nome = db.user ? `${db.user.last} ${db.user.first}`.toUpperCase() : '';
+  const pagine = [];
+  for (let i = 0; i < Math.max(1, blocks.length); i += MOD_BLOCCHI) pagine.push(blocks.slice(i, i + MOD_BLOCCHI));
+  const cell = (b, d, k) => {
+    const s = b && b.giorni[d];
+    if (!s) return '<td></td>';
+    return `<td>${k === 'in' ? fmtTime(s.start) : k === 'out' ? fmtTime(s.end) : hm(s.end - s.start)}</td>`;
+  };
+  const block = b => `
+    <tr class="mod-r1"><td class="mod-lab" rowspan="3"><div><span>cantiere</span><b>${b ? esc([m.pref, b.cantiere].filter(Boolean).join(' ')) : ''}</b></div>
+      <div><span>tip. intervento</span><b>${b ? esc(m.tipo || '') : ''}</b></div></td>
+      <td class="mod-k">ora inizio</td>${MOD_GIORNI.map((_, d) => cell(b, d, 'in')).join('')}</tr>
+    <tr><td class="mod-k">ora fine</td>${MOD_GIORNI.map((_, d) => cell(b, d, 'out')).join('')}</tr>
+    <tr class="mod-r3"><td class="mod-k">tot. ore</td>${MOD_GIORNI.map((_, d) => cell(b, d, 'tot')).join('')}</tr>`;
+  const one = lista => `<div class="modulo">
+    <div class="mod-head">
+      <div class="mod-f mod-nome"><span>COGNOME e NOME</span><b>${esc(nome)}</b></div>
+      <div class="mod-f"><span>Settimana DAL</span><b>${dmy(week)}</b></div>
+      <div class="mod-f"><span>AL</span><b>${dmy(fine)}</b></div>
+    </div>
+    <table class="mod-t">
+      <colgroup><col class="c-lab"><col class="c-k">${MOD_GIORNI.map(() => '<col class="c-d">').join('')}</colgroup>
+      <thead><tr><th colspan="2"></th>${MOD_GIORNI.map((g, d) => `<th>${g}<small>${dayFromIso(addDays(week, d)).getDate()}</small></th>`).join('')}</tr></thead>
+      <tbody>${[0, 1, 2, 3].map(i => block(lista[i])).join('')}</tbody>
+    </table>
+    <div class="mod-foot">
+      <img src="logo.png" alt="GE3CO Gestione Ecologia">
+      <p>Consegnare questo modulo compilato tassativamente entro il MARTEDÌ della settimana successiva al proprio Caposquadra o nell'apposita cassettina della sede di Pontedera. Il foglio dell'ultima settimana del mese deve invece pervenire entro il giorno 2 del mese successivo. Specificare bene il cantiere (es: Geofor Cascina) e la tipologia di intervento (es: RSU).<br>
+      Il lavoratore sarà chiamato a rispondere in caso di anomalia tra quanto da esso dichiarato e quanto previsto dagli ordini di servizio. La ripetizione di eventuali abusi sarà punita conformemente a quanto prevede il nostro CCNL.</p>
+    </div>
+  </div>`;
+  const tot = shifts.reduce((t, s) => t + (s.end - s.start), 0);
+  return { html: pagine.map(one).join('<div class="mod-cut"></div>'), turni: shifts.length, tot, moduli: pagine.length };
+}
+function modShow(week) {
+  const r = modDoc(week);
+  openDialog(`
+    <h3>📝 Modulo ore</h3>
+    <p class="note">${r.turni ? `${r.turni} turn${r.turni === 1 ? 'o' : 'i'} · ${hm(r.tot)} ore${r.moduli > 1 ? ` · ${r.moduli} moduli (più di 4 cantieri)` : ''}` : 'Nessuna timbratura in questa settimana.'}</p>
+    <div class="mod-wrap"><div class="mod-scale">${r.html}</div></div>
+    <div class="menu">
+      <button class="btn" value="print">📄 Salva PDF / stampa</button>
+      <div class="row"><button class="btn ghost" value="prev">◀ Sett. prima</button><button class="btn ghost" value="next">Sett. dopo ▶</button></div>
+      <button class="btn ghost" value="back">Indietro</button>
+    </div>`, a => {
+    if (a === 'prev' || a === 'next') { modWeek = addDays(week, a === 'prev' ? -7 : 7); return setTimeout(() => modShow(modWeek), 50); }
+    if (a === 'back') return setTimeout(modPick, 50);
+    if (a === 'print') setTimeout(() => {
+      $('#printArea').innerHTML = `<div class="mod-print">${r.html}</div>`;
+      document.body.classList.add('print-modulo');
+      window.print();
+      setTimeout(() => { document.body.classList.remove('print-modulo'); modShow(week); }, 300);
+    }, 50);
+  });
+  // Anteprima rimpicciolita per stare nello schermo del telefono
+  const wrap = $('#dlgBody .mod-wrap'), sc = $('#dlgBody .mod-scale');
+  if (wrap && sc) {
+    const k = Math.min(1, (wrap.clientWidth - 16) / 720);
+    sc.style.transform = `scale(${k})`;
+    sc.style.height = '0';
+    sc.parentElement.style.height = `${sc.scrollHeight * k + 16}px`;
+  }
 }
 
 // ---------- Stima busta paga (solo su questo telefono) ----------

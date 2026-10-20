@@ -290,3 +290,36 @@ label[hidden] { display: none !important; }
 .int-photo.wide img { height: auto; max-height: 220px; object-fit: contain; }
 .int-shot { width: 100%; border-radius: 12px; }
 a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; }
+
+/* Modulo ore settimanale (stesso schema del modulo cartaceo) */
+.mod-wrap { overflow: hidden; background: #fff; border-radius: 10px; padding: 8px; }
+.mod-scale { width: 720px; transform-origin: top left; }
+.modulo { color: #000; background: #fff; font-family: Arial, Helvetica, sans-serif; font-size: 11px; display: grid; gap: 6px; }
+.mod-head { display: grid; grid-template-columns: 2.2fr 1fr .8fr; gap: 14px; align-items: end; }
+.mod-f { display: flex; gap: 6px; align-items: baseline; border-bottom: 1px solid #000; padding-bottom: 2px; white-space: nowrap; }
+.mod-f span { font-weight: 700; font-size: 10px; }
+.mod-f b { font-size: 12px; font-family: "Courier New", monospace; }
+.mod-t { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.mod-t th, .mod-t td { border: 1px solid #000; height: 19px; text-align: center; padding: 0 2px; font-variant-numeric: tabular-nums; }
+.mod-t th { font-size: 10px; font-weight: 700; }
+.mod-t th small { display: block; font-weight: 400; font-size: 8px; color: #444; }
+.mod-t thead th:first-child { border: 0; }
+.mod-t td { font-family: "Courier New", monospace; font-size: 11px; font-weight: 700; }
+.mod-t col.c-lab { width: 25%; } .mod-t col.c-k { width: 9%; } .mod-t col.c-d { width: 9.43%; }
+.mod-t td.mod-lab { text-align: left; vertical-align: top; padding: 4px 6px; border-right: 0; font-family: Arial, sans-serif; font-weight: 400; }
+.mod-t td.mod-lab div { display: flex; gap: 5px; align-items: baseline; margin-bottom: 10px; line-height: 1.15; }
+.mod-t td.mod-lab span { font-size: 9px; white-space: nowrap; }
+.mod-t td.mod-lab b { font-family: "Courier New", monospace; font-size: 10px; }
+.mod-t td.mod-k { border-left: 0; text-align: right; font-family: Arial, sans-serif; font-size: 8.5px; font-weight: 400; padding-right: 4px; }
+.mod-t tr.mod-r3 td { border-bottom: 2px solid #000; }
+.mod-foot { display: grid; grid-template-columns: 150px 1fr; gap: 10px; align-items: center; border-bottom: 1px dashed #000; padding-bottom: 6px; }
+.mod-foot img { width: 150px; height: auto; }
+.mod-foot p { margin: 0; font-size: 8px; line-height: 1.3; }
+.mod-cut { height: 16px; }
+@media print {
+  html, body.print-modulo { background: #fff !important; }
+  body.print-modulo #printArea { font-family: Arial, sans-serif; background: #fff; }
+  .mod-print .modulo { page-break-inside: avoid; break-inside: avoid; margin-bottom: 8mm; }
+  .mod-print .mod-cut { height: 0; }
+}
+@page { size: A4 portrait; margin: 10mm; }
