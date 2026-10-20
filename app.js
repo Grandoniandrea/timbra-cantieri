@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 39;
+const APP_VERSION = 40;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -911,13 +911,14 @@ function planSquadEdit(id, data, turno) {
     <h3>${id ? 'Modifica squadra' : 'Nuova squadra'}</h3>
     <p class="note">${esc(dayLabel(s.data))} · ${esc(t.nome)} ${esc(t.orario)}</p>
     <label>Cantiere<select name="cantiere">${names.concat(s.cantiere && !names.includes(s.cantiere) ? [s.cantiere] : []).map(n => `<option ${n === def ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
-    <div><b>Operatori</b>
-      <div class="plan-people">${people.length ? people.map(p => {
+    ${people.length ? [0, 1, 2, 3].map(i => `<label>Operatore ${i + 1}${i ? ' (facoltativo)' : ''}<select name="op">
+      <option value="">${i ? '—' : 'Scegli…'}</option>
+      ${people.map(p => {
         const occ = altrove(p.nome, true), dop = altrove(p.nome, false);
-        return `<label class="pp"><input type="checkbox" name="op" value="${esc(p.nome)}" ${s.operatori.some(o => sameName(o, p.nome)) ? 'checked' : ''}>
-          <span>${esc(p.nome)}${occ ? ' <em>già in un\'altra squadra</em>' : dop ? ' <em class="dop">sarebbe doppio turno</em>' : ''}</span></label>`;
-      }).join('') : '<p class="note">Nessun operatore: aggiungili da 👥 Operatori.</p>'}</div>
-    </div>
+        const sel = s.operatori[i] && sameName(s.operatori[i], p.nome);
+        return `<option value="${esc(p.nome)}" ${sel ? 'selected' : ''}>${esc(p.nome)}${occ ? ' · già in squadra' : dop ? ' · doppio turno' : ''}</option>`;
+      }).join('')}
+    </select></label>`).join('') : '<p class="note">Nessun operatore: aggiungili da 👥 Operatori.</p>'}
     <label>Nota (facoltativa)<input name="nota" maxlength="200" value="${esc(s.nota || '')}" placeholder="es. corso, mezzo, indirizzo"></label>
     <div class="row">
       ${id ? '<button class="btn ghost danger-text" value="del" formnovalidate>Elimina</button>' : ''}
@@ -926,7 +927,7 @@ function planSquadEdit(id, data, turno) {
     </div>`, (a, fd) => {
     if (a === 'cancel') return setTimeout(planView, 50);
     if (a === 'del') { planSquads = planSquads.filter(x => x.id !== s.id); planDirty = true; return setTimeout(planView, 50); }
-    const ops = fd.getAll('op').map(String);
+    const ops = [...new Set(fd.getAll('op').map(String).filter(Boolean))];
     if (!ops.length) { alert('Scegli almeno un operatore.'); return false; }
     Object.assign(s, { cantiere: String(fd.get('cantiere') || def), operatori: ops, nota: String(fd.get('nota') || '').trim() });
     if (!id) planSquads.push(s);
