@@ -68,3 +68,10 @@ Senza codice chiunque conosca l'indirizzo dello script può inviare timbrature f
    Poi: Area responsabile → **🔗 Link di invito per gli operatori** → Invia su WhatsApp a ogni operatore,
    che lo apre una volta sul suo telefono.
 Da quel momento i telefoni senza link non possono più inviare né leggere niente.
+
+## Aggiornamento: DPI e vestiario, ore settimanali degli operatori
+Nel file `Codice.gs` ci sono la sezione "DPI e vestiario" (schede DPI Capi, DPI Taglie, DPI Consegne),
+i cinque `case 'dpi…'` in `admin_` e la colonna "Ore settimanali" nella scheda Operatori.
+Si installa come le altre parti: caricare il file completo, rimettere ID del foglio, nome e telefono
+del responsabile, salvare e pubblicare una **nuova versione** del deployment.
+Il codice di accesso e gli altri dati restano (sono nelle proprietà dello script).

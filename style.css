@@ -395,3 +395,26 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 }
 .ore-cnt i { white-space: nowrap; }
 .ore-box summary b { white-space: nowrap; }
+
+/* DPI e vestiario */
+.dpi-red { color: #dc2626; font-weight: 700; }
+.dpi-row { gap: 8px; }
+.dpi-chk { display: flex !important; align-items: center; gap: 10px; flex: 1; min-width: 0; font-weight: 600 !important; }
+.dpi-chk input { width: 22px; min-height: 22px; height: 22px; flex: none; }
+.dpi-chk em { display: block; font-style: normal; font-size: 11px; font-weight: 500; color: var(--muted); }
+dialog input.dpi-tg { width: 64px; min-height: 36px; padding: 4px 6px; text-align: center; flex: none; }
+dialog input.dpi-q { width: 44px; min-height: 36px; padding: 4px 6px; text-align: center; flex: none; }
+.dpi-taglie { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.dpi-list { display: grid; gap: 6px; max-height: 46vh; overflow: auto; }
+.dpi-it { border-radius: 10px; padding: 8px 10px; display: grid; gap: 2px; font-size: 14px; }
+.dpi-it b small { font-weight: 600; opacity: .8; }
+.dpi-it span { font-size: 12px; }
+.d-over { background: #dc2626; color: #fff; }
+.d-under { background: #ececeb; color: #575756; }
+.d-ok { background: #eef6d9; color: #3d5208; }
+.d-na, .d-none { background: var(--bg); color: var(--muted); border: 1px dashed var(--line); }
+@media (prefers-color-scheme: dark) {
+  .d-under { background: #2c2c2b; color: #d6d6d4; }
+  .d-ok { background: #24300c; color: #c5e27a; }
+}
+.pd-t.dpi-t thead th:first-child { background: #e7f2ea; border: 1px solid #000; }

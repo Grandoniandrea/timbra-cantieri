@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 44;
+const APP_VERSION = 45;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -770,6 +770,208 @@ function adminIntDone(x) {
       const one = (src, l) => `<div class="int-photo">${src ? `<img src="${src}" alt="${l}">` : `<span>${l}: nessuna</span>`}<small>${l}</small></div>`;
       box.innerHTML = one(prima, 'Prima') + one(dopo, 'Dopo');
     });
+}
+
+// ---------- DPI e vestiario (solo area responsabile) ----------
+// Consegne per operatore con scadenza calcolata dalla durata del capo, taglie, scadenze e cosa ordinare.
+let dpiData = null;
+const DPI_TAGLIA_LABEL = { maglia: 'Maglia', pantalone: 'Pantalone', scarpe: 'Scarpe' };
+const dpiMesiTxt = m => !m ? 'senza scadenza' : m % 12 === 0 ? `ogni ${m / 12 === 1 ? 'anno' : m / 12 + ' anni'}` : `ogni ${m} mes${m === 1 ? 'e' : 'i'}`;
+const dpiDays = iso => iso ? Math.round((dayFromIso(iso) - dayFromIso(isoDay(new Date()))) / 864e5) : null;
+const dpiStato = c => { const g = dpiDays(c.scadenza); return g === null ? 'na' : g < 0 ? 'over' : g <= 30 ? 'under' : 'ok'; };
+const dmyIt = iso => dayFromIso(iso).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' });
+const dpiTaglieDi = nome => (dpiData && dpiData.taglie[String(nome).trim().toLowerCase()]) || { maglia: '', pantalone: '', scarpe: '', note: '' };
+// Ultima consegna per ogni capo di un operatore (le precedenti sono già state sostituite)
+function dpiAttuali(nome) {
+  const m = {};
+  dpiData.consegne.filter(c => sameName(c.operatore, nome)).forEach(c => { if (!m[c.capo] || m[c.capo].data < c.data) m[c.capo] = c; });
+  return m;
+}
+function dpiLoad(then) {
+  call('dpi', null, 'Carico DPI e vestiario', out => {
+    if (!Array.isArray(out.capi)) return fail('Per usare DPI e vestiario va aggiornato lo script Google (guida nel repository).');
+    dpiData = out; then();
+  });
+}
+function adminDpi() { dpiLoad(dpiHome); }
+function dpiPeople() { return (dpiData.operatori || []).filter(o => o.attivo !== false).map(o => o.nome); }
+function dpiScadenze() {
+  const out = [];
+  dpiPeople().forEach(n => Object.values(dpiAttuali(n)).forEach(c => { const st = dpiStato(c); if (st === 'over' || st === 'under') out.push(c); }));
+  return out.sort((a, b) => a.scadenza.localeCompare(b.scadenza));
+}
+function dpiHome() {
+  const sc = dpiScadenze(), over = sc.filter(c => dpiStato(c) === 'over').length;
+  openDialog(`
+    <h3>🦺 DPI e vestiario</h3>
+    <button class="btn" value="new">➕ Nuova consegna</button>
+    <div class="menu">
+      <button class="btn ghost" value="op">👤 Dotazioni per operatore</button>
+      <button class="btn ghost" value="scad">⏰ Scadenze${sc.length ? ` <span class="badge">${sc.length}</span>` : ''}${over ? ` <small class="dpi-red">${over} scadut${over === 1 ? 'o' : 'i'}</small>` : ''}</button>
+      <button class="btn ghost" value="ord">📦 Da ordinare</button>
+      <button class="btn ghost" value="capi">⚙️ Capi e durata</button>
+      <button class="btn ghost" value="back">Indietro</button>
+    </div>`, a => {
+    const go = { new: () => dpiNew(), op: () => dpiPickOp(), scad: dpiScadView, ord: dpiOrder, capi: dpiCapiEdit, back: adminHome }[a];
+    if (go) setTimeout(go, 50);
+  });
+}
+function dpiNew(nome) {
+  const people = dpiPeople();
+  const capi = dpiData.capi.filter(c => c.attivo);
+  const sel = nome || people[0] || '';
+  const t = dpiTaglieDi(sel);
+  openDialog(`
+    <h3>➕ Nuova consegna</h3>
+    <label>Operatore<select name="op" id="dpiOp">${people.map(p => `<option ${p === sel ? 'selected' : ''}>${esc(p)}</option>`).join('')}</select></label>
+    <label>Data<input type="date" name="data" value="${isoDay(new Date())}"></label>
+    <p class="note">Spunta i capi consegnati. La taglia è quella salvata per l'operatore: se la cambi viene aggiornata.</p>
+    <div class="plan-people">${capi.map((c, i) => `<div class="pp dpi-row">
+      <label class="dpi-chk"><input type="checkbox" name="c${i}"><span>${esc(c.nome)}<em>${dpiMesiTxt(c.mesi)}</em></span></label>
+      ${c.taglia ? `<input name="t${i}" class="dpi-tg" value="${esc(t[c.taglia] || '')}" placeholder="${DPI_TAGLIA_LABEL[c.taglia]}" data-tipo="${c.taglia}" aria-label="Taglia ${esc(c.nome)}">` : ''}
+      <input name="q${i}" class="dpi-q" inputmode="numeric" value="1" aria-label="Quantità ${esc(c.nome)}">
+    </div>`).join('')}</div>
+    <label>Note (facoltative)<input name="note" maxlength="200" placeholder="es. sostituzione per usura"></label>
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Annulla</button><button class="btn" value="ok">Registra</button></div>`, (a, fd) => {
+    if (a === 'back') return setTimeout(dpiHome, 50);
+    const op = String(fd.get('op') || '');
+    const righe = [], taglie = Object.assign({}, dpiTaglieDi(op));
+    capi.forEach((c, i) => {
+      const tg = String(fd.get('t' + i) || '').trim();
+      if (c.taglia && tg) taglie[c.taglia] = tg;
+      if (fd.get('c' + i)) righe.push({ capo: c.nome, taglia: tg, qta: Number(fd.get('q' + i)) || 1 });
+    });
+    if (!op || !righe.length) { alert('Scegli l\'operatore e almeno un capo.'); return false; }
+    setTimeout(() => call('dpiconsegna', { consegna: { id: uid(), data: String(fd.get('data') || isoDay(new Date())), operatore: op, righe, note: String(fd.get('note') || '').trim(), taglie } },
+      'Registro la consegna', out => { dpiData = out; toast(`Consegna registrata ✓ (${righe.length} cap${righe.length === 1 ? 'o' : 'i'})`); dpiOp(op); }), 50);
+  });
+  // Cambiando operatore si ricaricano le sue taglie
+  $('#dpiOp').onchange = e => {
+    const tt = dpiTaglieDi(e.target.value);
+    document.querySelectorAll('#dlgBody .dpi-tg').forEach(inp => { inp.value = tt[inp.dataset.tipo] || ''; });
+  };
+}
+function dpiPickOp() {
+  openDialog(`
+    <h3>👤 Dotazioni per operatore</h3>
+    <div class="adm-list">${dpiPeople().map(p => {
+      const att = Object.values(dpiAttuali(p));
+      const o = att.filter(c => dpiStato(c) === 'over').length, u = att.filter(c => dpiStato(c) === 'under').length;
+      return `<button type="button" class="shift-row" data-dop="${esc(p)}"><b>${esc(p)}</b><br>
+        <span>${att.length ? `${att.length} capi consegnati` : 'Nessuna consegna'}${o ? ` · <b class="dpi-red">${o} scadut${o === 1 ? 'o' : 'i'}</b>` : ''}${u ? ` · ${u} in scadenza` : ''}</span></button>`;
+    }).join('') || '<p class="note">Nessun operatore.</p>'}</div>
+    <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(dpiHome, 50));
+  document.querySelectorAll('[data-dop]').forEach(b => { b.onclick = () => dpiOp(b.dataset.dop); });
+}
+function dpiOp(nome) {
+  const t = dpiTaglieDi(nome);
+  const att = dpiAttuali(nome);
+  const capi = dpiData.capi.filter(c => c.attivo || att[c.nome]);
+  const stTxt = c => { const g = dpiDays(c.scadenza); return g === null ? 'senza scadenza' : g < 0 ? `scaduto da ${-g} g` : g === 0 ? 'scade oggi' : `scade tra ${g} g`; };
+  openDialog(`
+    <h3>👤 ${esc(nome)}</h3>
+    <div class="dpi-taglie">
+      <label>Maglia<input name="maglia" value="${esc(t.maglia)}" placeholder="es. L"></label>
+      <label>Pantalone<input name="pantalone" value="${esc(t.pantalone)}" placeholder="es. 48"></label>
+      <label>Scarpe<input name="scarpe" value="${esc(t.scarpe)}" placeholder="es. 43"></label>
+    </div>
+    <div class="dpi-list">${capi.map(c => {
+      const x = att[c.nome];
+      return `<div class="dpi-it ${x ? 'd-' + dpiStato(x) : 'd-none'}"><b>${esc(c.nome)}${x && x.taglia ? ` <small>${esc(x.taglia)}</small>` : ''}</b>
+        <span>${x ? `consegnato il ${dmyIt(x.data)}${x.qta > 1 ? ` (×${x.qta})` : ''} · ${stTxt(x)}` : 'mai consegnato'}</span></div>`;
+    }).join('')}</div>
+    <div class="menu">
+      <button class="btn" value="new">➕ Nuova consegna a ${esc(nome)}</button>
+      <div class="row"><button class="btn ghost" value="tg">💾 Salva taglie</button><button class="btn ghost" value="pdf">📄 Scheda PDF</button></div>
+      <button class="btn ghost" value="back">Indietro</button>
+    </div>`, (a, fd) => {
+    if (a === 'new') return setTimeout(() => dpiNew(nome), 50);
+    if (a === 'pdf') return setTimeout(() => dpiPrint(nome), 50);
+    if (a === 'tg') return setTimeout(() => call('dpitaglie', { operatore: nome, taglie: { maglia: String(fd.get('maglia') || ''), pantalone: String(fd.get('pantalone') || ''), scarpe: String(fd.get('scarpe') || ''), note: t.note } },
+      'Salvo le taglie', out => { dpiData = out; toast('Taglie salvate ✓'); dpiOp(nome); }), 50);
+    setTimeout(dpiPickOp, 50);
+  });
+}
+function dpiScadView() {
+  const sc = dpiScadenze();
+  openDialog(`
+    <h3>⏰ Scadenze</h3>
+    <p class="note">Capi scaduti e in scadenza nei prossimi 30 giorni (conta l'ultima consegna di ogni capo).</p>
+    <div class="dpi-list">${sc.map(c => { const g = dpiDays(c.scadenza); return `<div class="dpi-it d-${dpiStato(c)}" data-dop="${esc(c.operatore)}">
+      <b>${esc(c.operatore)} · ${esc(c.capo)}${c.taglia ? ` <small>${esc(c.taglia)}</small>` : ''}</b>
+      <span>${g < 0 ? `scaduto da ${-g} giorni` : g === 0 ? 'scade oggi' : `scade tra ${g} giorni`} · ${dmyIt(c.scadenza)}</span></div>`; }).join('') || '<p>Nessun capo in scadenza. ✓</p>'}</div>
+    <div class="row"><button class="btn ghost" value="ord">📦 Da ordinare</button><button class="btn" value="back">Indietro</button></div>`,
+    a => setTimeout(a === 'ord' ? dpiOrder : dpiHome, 50));
+  document.querySelectorAll('#dlgBody [data-dop]').forEach(b => { b.style.cursor = 'pointer'; b.onclick = () => dpiOp(b.dataset.dop); });
+}
+// Da ordinare: capi scaduti o in scadenza, raggruppati per capo e taglia
+function dpiOrderRows() {
+  const m = {};
+  dpiScadenze().forEach(c => {
+    const tg = c.taglia || ((dpiData.capi.find(x => x.nome === c.capo) || {}).taglia ? dpiTaglieDi(c.operatore)[(dpiData.capi.find(x => x.nome === c.capo) || {}).taglia] : '') || '—';
+    const k = c.capo + '|' + tg;
+    (m[k] = m[k] || { capo: c.capo, taglia: tg, qta: 0, chi: [] });
+    m[k].qta += c.qta || 1; m[k].chi.push(c.operatore);
+  });
+  return Object.values(m).sort((a, b) => a.capo.localeCompare(b.capo) || String(a.taglia).localeCompare(String(b.taglia), 'it', { numeric: true }));
+}
+function dpiOrderDoc() {
+  const rows = dpiOrderRows();
+  return `<div class="plan-doc"><div class="pd-head"><img src="logo.png" alt="GE3CO"><div><h1>DPI e vestiario da ordinare</h1><p>Aggiornato al ${dmyIt(isoDay(new Date()))}</p></div></div>
+    <table class="pd-t dpi-t"><thead><tr><th style="text-align:left">Capo</th><th>Taglia</th><th>Quantità</th><th style="text-align:left">Per</th></tr></thead>
+    <tbody>${rows.map(r => `<tr><td>${esc(r.capo)}</td><td style="text-align:center">${esc(r.taglia)}</td><td style="text-align:center"><b>${r.qta}</b></td><td>${r.chi.map(esc).join(', ')}</td></tr>`).join('') || '<tr><td colspan="4">Niente da ordinare.</td></tr>'}</tbody></table></div>`;
+}
+function dpiOrder() {
+  const rows = dpiOrderRows();
+  openDialog(`
+    <h3>📦 Da ordinare</h3>
+    <p class="note">Capi scaduti o in scadenza nei prossimi 30 giorni, per taglia.</p>
+    <div class="rep-wrap"><table class="rep"><thead><tr><th>Capo</th><th>Taglia</th><th>Q.tà</th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td>${esc(r.capo)}</td><td>${esc(r.taglia)}</td><td>${r.qta}</td></tr>`).join('') || '<tr><td colspan="3">Niente da ordinare ✓</td></tr>'}</tbody></table></div>
+    <div class="menu">
+      <button class="btn" value="pdf" ${rows.length ? '' : 'disabled'}>📄 PDF / stampa per il fornitore</button>
+      <button class="btn ghost" value="back">Indietro</button>
+    </div>`, a => {
+    if (a === 'pdf') return setTimeout(() => dpiPrintHtml(dpiOrderDoc(), dpiOrder), 50);
+    setTimeout(dpiHome, 50);
+  });
+}
+function dpiDoc(nome) {
+  const t = dpiTaglieDi(nome);
+  const cons = dpiData.consegne.filter(c => sameName(c.operatore, nome)).sort((a, b) => a.data.localeCompare(b.data) || a.capo.localeCompare(b.capo));
+  return `<div class="plan-doc"><div class="pd-head"><img src="logo.png" alt="GE3CO"><div><h1>Scheda consegna DPI e vestiario</h1>
+      <p>Operatore: <b>${esc(nome)}</b> · Taglie: maglia ${esc(t.maglia || '—')}, pantalone ${esc(t.pantalone || '—')}, scarpe ${esc(t.scarpe || '—')}</p></div></div>
+    <table class="pd-t dpi-t"><thead><tr><th style="text-align:left">Data</th><th style="text-align:left">Capo / DPI</th><th>Taglia</th><th>Q.tà</th><th>Scadenza</th><th style="width:22%">Firma operatore</th></tr></thead>
+    <tbody>${cons.map(c => `<tr><td>${dmyIt(c.data)}</td><td>${esc(c.capo)}</td><td style="text-align:center">${esc(c.taglia || '')}</td><td style="text-align:center">${c.qta}</td><td style="text-align:center">${c.scadenza ? dmyIt(c.scadenza) : ''}</td><td style="height:26px"></td></tr>`).join('') || '<tr><td colspan="6">Nessuna consegna registrata.</td></tr>'}</tbody></table>
+    <p class="pd-note">Il lavoratore dichiara di aver ricevuto i dispositivi sopra indicati e si impegna a utilizzarli correttamente e a conservarli con cura (D.Lgs. 81/2008, art. 20 e 78).</p>
+    <p class="pd-note" style="margin-top:22px">Data ________________ &nbsp;&nbsp; Firma del lavoratore ______________________________ &nbsp;&nbsp; Firma del responsabile ______________________________</p></div>`;
+}
+function dpiPrintHtml(html, back) {
+  $('#printArea').innerHTML = html;
+  document.body.classList.add('print-modulo');
+  const imgs = [...document.querySelectorAll('#printArea img')];
+  Promise.all(imgs.map(i => i.complete ? null : new Promise(ok => { i.onload = i.onerror = ok; setTimeout(ok, 3000); }))).then(() => {
+    window.print();
+    setTimeout(() => { document.body.classList.remove('print-modulo'); back(); }, 300);
+  });
+}
+function dpiPrint(nome) { dpiPrintHtml(dpiDoc(nome), () => dpiOp(nome)); }
+function dpiCapiEdit() {
+  const capi = dpiData.capi;
+  openDialog(`
+    <h3>⚙️ Capi e durata</h3>
+    <p class="note">Ogni quanti mesi si sostituisce un capo. I valori iniziali sono indicativi: mettete quelli previsti da voi (0 = nessuna scadenza).</p>
+    <div class="plan-people">${capi.map((c, i) => `<div class="pp dpi-row">
+      <label class="dpi-chk"><input type="checkbox" name="a${i}" ${c.attivo ? 'checked' : ''}><span>${esc(c.nome)}</span></label>
+      <label class="ore-in"><input name="m${i}" inputmode="numeric" value="${c.mesi}" aria-label="Mesi ${esc(c.nome)}"> mesi</label></div>`).join('')}</div>
+    <label>Aggiungi un capo<input name="nuovo" maxlength="60" placeholder="es. Tappi antirumore"></label>
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Annulla</button><button class="btn" value="ok">Salva</button></div>`, (a, fd) => {
+    if (a === 'back') return setTimeout(dpiHome, 50);
+    const lista = capi.map((c, i) => ({ nome: c.nome, taglia: c.taglia, mesi: Number(fd.get('m' + i)) || 0, attivo: !!fd.get('a' + i) }));
+    const nuovo = String(fd.get('nuovo') || '').trim();
+    if (nuovo && !lista.some(c => sameName(c.nome, nuovo))) lista.push({ nome: nuovo.charAt(0).toUpperCase() + nuovo.slice(1), taglia: '', mesi: 12, attivo: true });
+    setTimeout(() => call('dpicapi', { capi: lista }, 'Salvo i capi', out => { dpiData = out; toast('Capi salvati ✓'); dpiHome(); }), 50);
+  });
 }
 
 // ---------- Programma della settimana ----------
@@ -1807,6 +2009,7 @@ function adminHome() {
       <button class="btn ghost" value="sites">🏗️ Cantieri: aggiungi, togli, rinomina</button>
       <button class="btn ghost" value="report">📊 Report del mese: PDF, stampa, email, condividi</button>
       <button class="btn ghost" value="int">📍 Interventi da assegnare</button>
+      <button class="btn ghost" value="dpi">🦺 DPI e vestiario</button>
       <button class="btn ghost" value="plan">📅 Programma della settimana</button>
       <button class="btn ghost" value="stats">📈 Statistiche ore per cantiere</button>
       <button class="btn ghost" value="extra">⏱️ Ore extra da autorizzare${adminExtraCount ? ` <span class="badge">${adminExtraCount}</span>` : ''}</button>
@@ -1827,6 +2030,7 @@ function adminHome() {
       stats: adminStatsPick,
       plan: () => adminPlan(),
       int: adminInterventi,
+      dpi: adminDpi,
       shifts: adminShiftsPick,
       extra: () => call('extra', null, 'Carico le richieste', out => adminExtra(out.extra)),
       assenze: () => call('assenze', null, 'Carico ferie e permessi', out => adminAbsences(out.assenze)),

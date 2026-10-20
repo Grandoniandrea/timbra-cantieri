@@ -184,6 +184,11 @@ function admin_(req) {
     case 'modifica': modificaTimbratura_(req.t); return { ok: true };
     case 'elimina': remove_(req.id); return { ok: true };
     case 'extra': return { ok: true, extra: extraInAttesa_() };
+    case 'dpi': return dpi_();
+    case 'dpiconsegna': consegnaDpi_(req.consegna); return dpi_();
+    case 'dpitaglie': salvaTaglieDpi_(req.operatore, req.taglie); return dpi_();
+    case 'dpicapi': salvaCapiDpi_(req.capi); return dpi_();
+    case 'dpielimina': eliminaDpi_(req.id); return dpi_();
     case 'codice': return { ok: true, codice: PropertiesService.getScriptProperties().getProperty('CODICE_ACCESSO') || '' };
     case 'programma': return { ok: true, squadre: programma_(req.da, req.a), operatori: operatori_(), cantieri: tuttiCantieri_() };
     case 'salvaprogramma': salvaProgramma_(req.da, req.a, req.squadre);
@@ -1093,4 +1098,103 @@ function interventiPubblico_(e) {
   const lista = interventi_().filter(x => (x.assegnato === INT_TUTTI || x.assegnato.toLowerCase() === nome) &&
     (x.stato === INT_DA_FARE || (x.fattoIl && x.fattoIl > limite)));
   return { ok: true, interventi: lista };
+}
+
+// ---------- DPI e vestiario (solo responsabile) ----------
+// Schede: "DPI Capi" (capi e ogni quanti mesi si sostituiscono), "DPI Taglie" (taglie per operatore),
+// "DPI Consegne" (una riga per capo consegnato, con la data di scadenza calcolata).
+
+const FOGLIO_DPI_CAPI = 'DPI Capi', FOGLIO_DPI_TAGLIE = 'DPI Taglie', FOGLIO_DPI_CONS = 'DPI Consegne';
+// Durate indicative in mesi: il responsabile le cambia dall'app (o nel foglio)
+const DPI_CAPI_INIZIALI = [
+  ['Maglietta', 'maglia', 6], ['Felpa', 'maglia', 12], ['Pantalone', 'pantalone', 12], ['Jeans', 'pantalone', 12],
+  ['Scarpe antinfortunistiche', 'scarpe', 12], ['Giaccone', 'maglia', 24], ['Gilet alta visibilità', 'maglia', 12],
+  ['Occhiali', '', 24], ['Caschetto', '', 48], ['Guanti', '', 1]];
+const INTEST_DPI_CONS = ['ID', 'Data', 'Operatore', 'Capo', 'Taglia', 'Quantità', 'Scadenza', 'Note', 'Consegna'];
+
+function foglioDpi_(nome, intest, iniziali) {
+  const ss = ss_();
+  let sh = ss.getSheetByName(nome);
+  if (!sh) {
+    sh = ss.insertSheet(nome);
+    sh.getRange(1, 1, 1, intest.length).setValues([intest]).setFontWeight('bold').setBackground('#e7f2ea');
+    sh.setFrozenRows(1);
+    if (iniziali && iniziali.length) sh.getRange(2, 1, iniziali.length, iniziali[0].length).setValues(iniziali);
+  }
+  return sh;
+}
+const dpiCapiSh_ = () => foglioDpi_(FOGLIO_DPI_CAPI, ['Capo', 'Taglia da usare', 'Sostituzione (mesi)', 'Attivo'],
+  DPI_CAPI_INIZIALI.map(c => c.concat(['SI'])));
+const dpiTaglieSh_ = () => foglioDpi_(FOGLIO_DPI_TAGLIE, ['Operatore', 'Maglia', 'Pantalone', 'Scarpe', 'Note']);
+function dpiConsSh_() {
+  const sh = foglioDpi_(FOGLIO_DPI_CONS, INTEST_DPI_CONS);
+  sh.getRange('B:B').setNumberFormat('dd/mm/yyyy');
+  sh.getRange('G:G').setNumberFormat('dd/mm/yyyy');
+  return sh;
+}
+function righe_(sh, n) { return sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, n).getValues() : []; }
+
+function dpi_() {
+  const capi = righe_(dpiCapiSh_(), 4).filter(r => String(r[0]).trim())
+    .map(r => ({ nome: String(r[0]).trim(), taglia: String(r[1] || ''), mesi: Number(r[2]) || 0, attivo: String(r[3]).toUpperCase() !== 'NO' }));
+  const taglie = {};
+  righe_(dpiTaglieSh_(), 5).filter(r => String(r[0]).trim()).forEach(r => {
+    taglie[String(r[0]).trim().toLowerCase()] = { maglia: String(r[1] || ''), pantalone: String(r[2] || ''), scarpe: String(r[3] || ''), note: String(r[4] || '') };
+  });
+  const consegne = righe_(dpiConsSh_(), INTEST_DPI_CONS.length).filter(r => r[0] && r[1] instanceof Date)
+    .map(r => ({ id: String(r[0]), data: dataIso_(r[1]), operatore: String(r[2]), capo: String(r[3]), taglia: String(r[4] || ''),
+      qta: Number(r[5]) || 1, scadenza: r[6] instanceof Date ? dataIso_(r[6]) : '', note: String(r[7] || ''), consegna: String(r[8] || '') }))
+    .sort((a, b) => b.data.localeCompare(a.data));
+  return { ok: true, capi, taglie, consegne, operatori: operatori_() };
+}
+
+function salvaCapiDpi_(lista) {
+  if (!Array.isArray(lista)) return;
+  const visti = {};
+  const righe = lista.map(c => {
+    const nome = String(c && c.nome || '').trim().slice(0, 60);
+    if (!nome || visti[nome.toLowerCase()]) return null;
+    visti[nome.toLowerCase()] = true;
+    return [nome, ['maglia', 'pantalone', 'scarpe'].indexOf(c.taglia) >= 0 ? c.taglia : '', Math.max(0, Math.min(120, Number(c.mesi) || 0)), c.attivo === false ? 'NO' : 'SI'];
+  }).filter(Boolean);
+  const sh = dpiCapiSh_();
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 4).clearContent();
+  if (righe.length) sh.getRange(2, 1, righe.length, 4).setValues(righe);
+}
+
+function salvaTaglieDpi_(operatore, t) {
+  const nome = String(operatore || '').trim();
+  if (!nome || !t) return;
+  const sh = dpiTaglieSh_();
+  const tutte = righe_(sh, 5);
+  const i = tutte.findIndex(r => String(r[0]).trim().toLowerCase() === nome.toLowerCase());
+  const riga = [nome, String(t.maglia || '').slice(0, 10), String(t.pantalone || '').slice(0, 10), String(t.scarpe || '').slice(0, 10), String(t.note || '').slice(0, 200)];
+  if (i >= 0) sh.getRange(i + 2, 1, 1, 5).setValues([riga]);
+  else sh.appendRow(riga);
+}
+
+/** Una consegna: più capi allo stesso operatore nello stesso giorno. La scadenza si calcola dalla durata del capo. */
+function consegnaDpi_(c) {
+  const giorno = daIso_(c && c.data);
+  const nome = String(c && c.operatore || '').trim();
+  if (!giorno || !nome || !Array.isArray(c.righe) || !c.righe.length) return;
+  const mesi = {};
+  righe_(dpiCapiSh_(), 4).forEach(r => { mesi[String(r[0]).trim().toLowerCase()] = Number(r[2]) || 0; });
+  const idConsegna = String(c.id || Utilities.getUuid()).slice(0, 40);
+  const nuove = c.righe.filter(r => r && String(r.capo || '').trim()).map((r, i) => {
+    const m = mesi[String(r.capo).trim().toLowerCase()] || 0;
+    const scad = m ? new Date(giorno.getFullYear(), giorno.getMonth() + m, giorno.getDate()) : '';
+    return [idConsegna + '-' + i, giorno, nome, String(r.capo).trim().slice(0, 60), String(r.taglia || '').slice(0, 10),
+      Math.max(1, Math.min(20, Number(r.qta) || 1)), scad, String(c.note || '').slice(0, 200), idConsegna];
+  });
+  if (!nuove.length) return;
+  const sh = dpiConsSh_();
+  sh.getRange(sh.getLastRow() + 1, 1, nuove.length, INTEST_DPI_CONS.length).setValues(nuove);
+  if (c.taglie) salvaTaglieDpi_(nome, c.taglie);
+}
+
+function eliminaDpi_(id) {
+  const sh = dpiConsSh_();
+  const r = trovaRiga_(sh, id);
+  if (r) sh.deleteRow(r);
 }
