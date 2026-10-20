@@ -748,7 +748,7 @@ function inviaRiepilogo_(anno, mese) {
 /** Esegui una volta: invia il riepilogo ogni 1° del mese alle 7. */
 function attivaInvioAutomatico() {
   configura();
-  ss_().toast('Invio automatico attivo: il 1° di ogni mese alle 7.');
+  Logger.log('Invio automatico attivo: il 1° di ogni mese alle 7.'); // toast() non funziona in uno script autonomo
 }
 
 // ---------- Avvisi immediati al responsabile ----------
@@ -773,7 +773,7 @@ function attivaAvvisiImmediati() {
     .forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('avvisiImmediati').timeBased().everyHours(1).create();
   avvisiImmediati(true);
-  ss_().toast('Avvisi immediati attivi.');
+  Logger.log('Avvisi immediati attivi: controllo ogni ora.'); // toast() non funziona in uno script autonomo
 }
 
 function avvisiImmediati(soloSegna) {
