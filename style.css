@@ -345,3 +345,33 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .pp-n { background: #fff7c2; border: 1px solid #e5d36a; border-radius: 3px; padding: 0 4px; font-size: 11px; }
 .pp-n.pp-d { background: #f8b4b0; border-color: #d9534f; font-weight: 700; }
 .pd-note { font-size: 10px; margin: 8px 0 0; }
+
+/* Specchietto ore della settimana */
+.ore-box { border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; background: var(--bg); }
+.ore-box summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
+.ore-box summary::-webkit-details-marker { display: none; }
+.ore-cnt { margin-left: auto; display: flex; gap: 4px; }
+.ore-cnt i { font-style: normal; font-size: 11px; font-weight: 700; border-radius: 999px; padding: 1px 7px; }
+.ore-grid { display: grid; gap: 4px; margin-top: 8px; max-height: 40vh; overflow: auto; }
+.ore-row { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 8px; align-items: center; border-radius: 8px; padding: 5px 8px; font-size: 13px; }
+.ore-nome { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ore-num { font-variant-numeric: tabular-nums; }
+.ore-num small { font-size: 11px; }
+.ore-diff { font-size: 12px; font-weight: 700; text-align: right; min-width: 74px; }
+.ore-bar { grid-column: 1 / -1; height: 4px; border-radius: 999px; background: rgba(127,127,127,.25); overflow: hidden; }
+.ore-bar span { display: block; height: 100%; background: currentColor; }
+.o-over { background: #dc2626; color: #fff; }
+.o-under { background: #fef3c7; color: #92400e; }
+.o-ok { background: #dcfce7; color: #166534; }
+.ore-cnt .o-over { background: #dc2626; color: #fff; }
+@media (prefers-color-scheme: dark) {
+  .o-under { background: #3a2a0c; color: #fcd34d; }
+  .o-ok { background: #12301d; color: #86efac; }
+}
+.plan-ferie { font: inherit; font-size: 13px; text-align: left; color: #0369a1; background: none; border: 1px dashed #7dd3fc; border-radius: 10px; padding: 6px 8px; cursor: pointer; }
+@media (prefers-color-scheme: dark) { .plan-ferie { color: #7dd3fc; border-color: #0c4a6e; } }
+.pp-ore { justify-content: space-between; }
+.pp-ore > label:first-child { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.ore-in { display: flex !important; align-items: center; gap: 4px; font-size: 12px; font-weight: 500 !important; white-space: nowrap; }
+.ore-in input { width: 48px; min-height: 34px; padding: 4px 6px; text-align: center; }
+.pd-day em { display: block; font-style: normal; font-weight: 400; font-size: 10px; color: #0369a1; margin-top: 4px; }

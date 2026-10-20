@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 41;
+const APP_VERSION = 42;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -783,10 +783,29 @@ const mondayOf = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate
 const sameName = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 const dayLabel = s => dayFromIso(s).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'short' });
 const turnoInfo = n => PLAN_TURNI.find(t => t.nome === n) || { nome: n, orario: '' };
-function doppi(squadre) {
-  // "data|nome" → numero di turni diversi
+// Ore settimanali da contratto: dal foglio Operatori se lo script le gestisce, altrimenti salvate su questo telefono
+const ORE_DEFAULT = 30;
+const FERIE = 'Ferie';
+function oreContratto(nome) {
+  const p = (typeof planPeople !== 'undefined' ? planPeople : []).find(x => sameName(x.nome, nome));
+  if (p && Number(p.ore) > 0) return Number(p.ore);
+  const loc = (db.oreOp || {})[String(nome).trim().toLowerCase()];
+  return Number(loc) > 0 ? Number(loc) : ORE_DEFAULT;
+}
+// Ore in programma nella settimana: ogni turno (e ogni giorno di ferie) vale oreTurno ore
+function oreSettimana(squadre) {
   const m = {};
   squadre.forEach(s => s.operatori.forEach(o => {
+    const k = o.trim().toLowerCase();
+    const x = m[k] || (m[k] = { nome: o, lavoro: 0, ferie: 0 });
+    if (s.turno === FERIE) x.ferie += cfg().oreTurno; else x.lavoro += cfg().oreTurno;
+  }));
+  return m;
+}
+function doppi(squadre) {
+  // "data|nome" → numero di turni diversi (le ferie non contano)
+  const m = {};
+  squadre.filter(s => s.turno !== FERIE).forEach(s => s.operatori.forEach(o => {
     const k = s.data + '|' + o.toLowerCase();
     (m[k] = m[k] || new Set()).add(s.turno);
   }));
@@ -823,6 +842,8 @@ function renderPlan() {
   const when = d => d === oggi ? 'Oggi' : d === domani ? 'Domani' : dayLabel(d);
   const rows = mine.slice(0, 4).map(s => {
     const t = turnoInfo(s.turno);
+    if (s.turno === FERIE) return `<li><span class="dot" style="background:#0ea5e9"></span>
+      <div class="grow"><b>${esc(when(s.data))} · 🌴 Ferie</b><span>${s.nota ? esc(s.nota) : 'Giorno di ferie'}</span></div></li>`;
     const altri = s.operatori.filter(o => !isMe(o));
     const site = db.sites.find(x => x.name === s.cantiere);
     return `<li>
@@ -861,6 +882,7 @@ function planView() {
       <button class="btn ghost" value="next" formnovalidate aria-label="Settimana dopo">▶</button>
     </div>
     ${planDirty ? '<p class="plan-dirty">Modifiche non salvate</p>' : ''}
+    ${planHoursBox()}
     <div class="plan-days">${days.map(d => `
       <div class="plan-day">
         <div class="plan-day-h">${esc(dayLabel(d))}</div>
@@ -873,6 +895,10 @@ function planView() {
             </button>`).join('')}
             <button class="plan-add" value="add:${d}:${t.nome}" formnovalidate>+ Squadra</button></div>`;
         }).join('')}
+        ${(() => {
+          const f = planSquads.find(s => s.data === d && s.turno === FERIE);
+          return `<button class="plan-ferie" value="ferie:${d}" formnovalidate>🌴 ${f ? `Ferie: ${f.operatori.map(esc).join(', ')}` : '+ Ferie'}</button>`;
+        })()}
       </div>`).join('')}</div>
     <p class="note"><span class="nm doppio">Nome</span> = doppio turno quel giorno.</p>
     <div class="menu">
@@ -898,6 +924,7 @@ function planView() {
       return setTimeout(adminHome, 50);
     }
     if (a.startsWith('add:')) { const [, d, t] = a.split(':'); return setTimeout(() => planSquadEdit(null, d, t), 50); }
+    if (a.startsWith('ferie:')) return setTimeout(() => planFerieEdit(a.slice(6)), 50);
     if (a.startsWith('edit:')) return setTimeout(() => planSquadEdit(a.slice(5)), 50);
   });
 }
@@ -915,7 +942,7 @@ function planDoc() {
     <table class="pd-t">
       <colgroup><col style="width:16%"><col style="width:42%"><col style="width:42%"></colgroup>
       <thead><tr><th></th>${PLAN_TURNI.map(t => `<th>${t.nome.toUpperCase()} ${t.orario.replace('–', '.00 – ')}.00</th>`).join('')}</tr></thead>
-      <tbody>${days.map(d => `<tr><th class="pd-day">${esc(dayFromIso(d).toLocaleDateString('it-IT', { weekday: 'long' }))}<small>${dayFromIso(d).getDate()}</small></th>
+      <tbody>${days.map(d => `<tr><th class="pd-day">${esc(dayFromIso(d).toLocaleDateString('it-IT', { weekday: 'long' }))}<small>${dayFromIso(d).getDate()}</small>${(() => { const f = planSquads.find(x => x.data === d && x.turno === FERIE); return f ? `<em>🌴 Ferie: ${f.operatori.map(esc).join(', ')}</em>` : ''; })()}</th>
         ${PLAN_TURNI.map(t => `<td>${cell(d, t.nome)}</td>`).join('')}</tr>`).join('')}</tbody>
     </table>
     <p class="pd-note"><span class="pp-n pp-d">Nome</span> = doppio turno · Ogni turno vale ${cfg().oreTurno} ore · Dove non è indicato il cantiere vale PISA</p>
@@ -968,13 +995,66 @@ async function planSharePdf() {
     setTimeout(planView, 300);
   });
 }
+// Specchietto delle ore della settimana: chi è sotto le sue ore, chi è giusto, chi sfora
+function planHoursBox() {
+  const ore = oreSettimana(planSquads);
+  const names = new Map();
+  planPeople.filter(p => p.attivo !== false).forEach(p => names.set(p.nome.trim().toLowerCase(), p.nome));
+  Object.values(ore).forEach(x => names.set(x.nome.trim().toLowerCase(), names.get(x.nome.trim().toLowerCase()) || x.nome));
+  if (!names.size) return '';
+  const rows = [...names.entries()].map(([k, nome]) => {
+    const x = ore[k] || { lavoro: 0, ferie: 0 };
+    const tot = x.lavoro + x.ferie, max = oreContratto(nome), diff = tot - max;
+    return { nome, x, tot, max, diff, st: diff > 0 ? 'over' : diff === 0 ? 'ok' : 'under' };
+  }).sort((a, b) => ({ over: 0, under: 1, ok: 2 })[a.st] - ({ over: 0, under: 1, ok: 2 })[b.st] || (a.st === 'over' ? b.diff - a.diff : a.diff - b.diff) || a.nome.localeCompare(b.nome));
+  const n = st => rows.filter(r => r.st === st).length;
+  return `<details class="ore-box" ${planHoursOpen ? 'open' : ''} id="oreBox">
+    <summary><b>⏱️ Ore della settimana</b>
+      <span class="ore-cnt">${n('over') ? `<i class="o-over">${n('over')} oltre</i>` : ''}${n('under') ? `<i class="o-under">${n('under')} sotto</i>` : ''}${n('ok') ? `<i class="o-ok">${n('ok')} ok</i>` : ''}</span></summary>
+    <div class="ore-grid">${rows.map(r => `<div class="ore-row o-${r.st}">
+      <span class="ore-nome">${esc(r.nome)}</span>
+      <span class="ore-num">${r.tot}/${r.max} h${r.x.ferie ? ` <small>🌴${r.x.ferie}</small>` : ''}</span>
+      <span class="ore-diff">${r.diff > 0 ? `+${r.diff} oltre` : r.diff < 0 ? `mancano ${-r.diff}` : '✓'}</span>
+      <span class="ore-bar"><span style="width:${Math.min(100, r.tot / r.max * 100)}%"></span></span>
+    </div>`).join('')}</div>
+    <p class="note">Ogni turno vale ${cfg().oreTurno} h, anche il giorno di ferie. Le ore da contratto si cambiano in 👥 Operatori.</p>
+  </details>`;
+}
+let planHoursOpen = true;
+document.addEventListener('toggle', e => { if (e.target && e.target.id === 'oreBox') planHoursOpen = e.target.open; }, true);
+function planFerieEdit(d) {
+  let f = planSquads.find(s => s.data === d && s.turno === FERIE);
+  const ore = oreSettimana(planSquads);
+  const occupato = nome => planSquads.some(x => x.data === d && x.turno !== FERIE && x.operatori.some(o => sameName(o, nome)));
+  const people = planPeople.filter(p => p.attivo !== false || (f && f.operatori.some(o => sameName(o, p.nome))));
+  openDialog(`
+    <h3>🌴 Ferie</h3>
+    <p class="note">${esc(dayLabel(d))} · il giorno di ferie conta ${cfg().oreTurno} ore</p>
+    <div class="plan-people">${people.map(p => {
+      const x = ore[p.nome.trim().toLowerCase()] || { lavoro: 0, ferie: 0 };
+      const diff = x.lavoro + x.ferie - oreContratto(p.nome);
+      return `<label class="pp"><input type="checkbox" name="op" value="${esc(p.nome)}" ${f && f.operatori.some(o => sameName(o, p.nome)) ? 'checked' : ''}>
+        <span>${esc(p.nome)} <em class="${diff > 0 ? 'dop' : ''}">${x.lavoro + x.ferie}/${oreContratto(p.nome)} h${diff < 0 ? ` · mancano ${-diff}` : diff > 0 ? ` · ${diff} oltre` : ''}${occupato(p.nome) ? ' · in squadra quel giorno' : ''}</em></span></label>`;
+    }).join('') || '<p class="note">Nessun operatore.</p>'}</div>
+    <div class="row"><button class="btn ghost" value="cancel" formnovalidate>Annulla</button><button class="btn" value="ok">OK</button></div>`, (a, fd) => {
+    if (a !== 'ok') return setTimeout(planView, 50);
+    const ops = fd.getAll('op').map(String);
+    planSquads = planSquads.filter(x => !(x.data === d && x.turno === FERIE));
+    if (ops.length) planSquads.push({ id: f ? f.id : uid(), data: d, turno: FERIE, cantiere: 'FERIE', operatori: ops, nota: '' });
+    planDirty = true;
+    setTimeout(planView, 50);
+  });
+}
 function planSquadEdit(id, data, turno) {
   const s = id ? planSquads.find(x => x.id === id) : { id: uid(), data, turno, cantiere: '', operatori: [], nota: '' };
   if (!s) return planView();
   const names = planSites.map(c => c.nome);
   const def = s.cantiere || (names.includes('PISA') ? 'PISA' : names[0] || '');
   // Chi è già in un'altra squadra nello stesso giorno: stesso turno (occupato) o altro turno (diventa doppio)
-  const altrove = (nome, stessoTurno) => planSquads.some(x => x.id !== s.id && x.data === s.data && (x.turno === s.turno) === stessoTurno && x.operatori.some(o => sameName(o, nome)));
+  const altrove = (nome, stessoTurno) => planSquads.some(x => x.id !== s.id && x.turno !== FERIE && x.data === s.data && (x.turno === s.turno) === stessoTurno && x.operatori.some(o => sameName(o, nome)));
+  const inFerie = nome => planSquads.some(x => x.turno === FERIE && x.data === s.data && x.operatori.some(o => sameName(o, nome)));
+  const oreW = oreSettimana(planSquads.filter(x => x.id !== s.id));
+  const oreTxt = nome => { const x = oreW[nome.trim().toLowerCase()] || { lavoro: 0, ferie: 0 }; return `${x.lavoro + x.ferie}/${oreContratto(nome)} h`; };
   const people = planPeople.filter(p => p.attivo !== false || s.operatori.some(o => sameName(o, p.nome)));
   const t = turnoInfo(s.turno);
   openDialog(`
@@ -986,7 +1066,7 @@ function planSquadEdit(id, data, turno) {
       ${people.map(p => {
         const occ = altrove(p.nome, true), dop = altrove(p.nome, false);
         const sel = s.operatori[i] && sameName(s.operatori[i], p.nome);
-        return `<option value="${esc(p.nome)}" ${sel ? 'selected' : ''}>${esc(p.nome)}${occ ? ' · già in squadra' : dop ? ' · doppio turno' : ''}</option>`;
+        return `<option value="${esc(p.nome)}" ${sel ? 'selected' : ''}>${esc(p.nome)} · ${oreTxt(p.nome)}${inFerie(p.nome) ? ' · IN FERIE' : occ ? ' · già in squadra' : dop ? ' · doppio turno' : ''}</option>`;
       }).join('')}
     </select></label>`).join('') : '<p class="note">Nessun operatore: aggiungili da 👥 Operatori.</p>'}
     <label>Nota (facoltativa)<input name="nota" maxlength="200" value="${esc(s.nota || '')}" placeholder="es. corso, mezzo, indirizzo"></label>
@@ -1020,20 +1100,25 @@ function planPeopleEdit() {
   openDialog(`
     <h3>👥 Operatori</h3>
     <p class="note">Chi è spuntato compare nel programma. Chi ha già timbrato c'è già.</p>
-    <div class="plan-people">${planPeople.map((p, i) => `<label class="pp"><input type="checkbox" name="on" value="${i}" ${p.attivo !== false ? 'checked' : ''}><span>${esc(p.nome)}</span></label>`).join('')}</div>
+    <div class="plan-people">${planPeople.map((p, i) => `<div class="pp pp-ore"><label><input type="checkbox" name="on" value="${i}" ${p.attivo !== false ? 'checked' : ''}><span>${esc(p.nome)}</span></label>
+      <label class="ore-in"><input name="ore${i}" inputmode="numeric" value="${oreContratto(p.nome)}" aria-label="Ore settimanali di ${esc(p.nome)}"> h/sett.</label></div>`).join('')}</div>
     <label>Aggiungi operatori (uno per riga o separati da virgola)<textarea name="nuovo" rows="3" placeholder="es. Rossi&#10;Bianchi&#10;Mario Verdi"></textarea></label>
     <div class="row"><button class="btn ghost" value="cancel" formnovalidate>Indietro</button><button class="btn" value="ok">Salva</button></div>`, (a, fd) => {
     if (a === 'cancel') return setTimeout(planView, 50);
     const on = new Set(fd.getAll('on').map(Number));
-    const lista = planPeople.map((p, i) => ({ nome: p.nome, attivo: on.has(i) }));
+    const lista = planPeople.map((p, i) => ({ nome: p.nome, attivo: on.has(i), ore: Number(String(fd.get('ore' + i) || '').replace(',', '.')) || ORE_DEFAULT }));
+    db.oreOp = Object.assign({}, db.oreOp);
+    lista.forEach(p => { db.oreOp[p.nome.trim().toLowerCase()] = p.ore; });
+    save();
     const cap = v => String(v || '').trim().replace(/\s+/g, ' ').replace(/(^|[\s'-])\S/g, c => c.toUpperCase());
     String(fd.get('nuovo') || '').split(/[\n,;]+/).map(v => cap(String(v).toLowerCase())).filter(Boolean).forEach(nuovo => {
       // Un cognome già presente come "Nome Cognome" non si duplica
       const giaC = lista.some(p => sameName(p.nome, nuovo) || sameName(p.nome.split(' ').slice(-1)[0], nuovo));
-      if (!giaC) lista.push({ nome: nuovo, attivo: true });
+      if (!giaC) lista.push({ nome: nuovo, attivo: true, ore: ORE_DEFAULT });
     });
     setTimeout(() => call('operatori', { operatori: lista }, 'Salvo gli operatori', out => {
-      planPeople = out.operatori || lista; toast('Operatori salvati ✓'); planView();
+      planPeople = (out.operatori || lista).map(p => Object.assign({}, p, { ore: Number(p.ore) > 0 ? Number(p.ore) : (lista.find(l => sameName(l.nome, p.nome)) || {}).ore }));
+      toast('Operatori salvati ✓'); planView();
     }), 50);
   });
 }
