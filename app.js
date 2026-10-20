@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 36;
+const APP_VERSION = 37;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -1039,6 +1039,62 @@ function modDoc(week) {
   const tot = shifts.length * cfg().oreTurno * 3600000;
   return { html: pagine.map(one).join('<div class="mod-cut"></div>'), turni: shifts.length, tot, moduli: pagine.length };
 }
+// Crea il PDF del modulo sul telefono e lo condivide (WhatsApp, email…) al responsabile
+const loadScript = src => new Promise((ok, ko) => {
+  if (document.querySelector(`script[src="${src}"]`)) return ok();
+  const el = document.createElement('script'); el.src = src; el.onload = ok; el.onerror = ko; document.head.appendChild(el);
+});
+async function modPdf(r) {
+  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;left:-10000px;top:0;width:760px;background:#fff;padding:0';
+  box.innerHTML = r.html;
+  document.body.appendChild(box);
+  try {
+    await Promise.all([...box.querySelectorAll('img')].map(i => i.complete ? null : new Promise(ok => { i.onload = i.onerror = ok; setTimeout(ok, 3000); })));
+    const pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const forms = [...box.querySelectorAll('.modulo')];
+    let y = 10;
+    for (const f of forms) {
+      const c = await window.html2canvas(f, { scale: 2, backgroundColor: '#ffffff' });
+      const w = 190, h = c.height * w / c.width;
+      if (y + h > 287) { pdf.addPage(); y = 10; }
+      pdf.addImage(c.toDataURL('image/jpeg', 0.92), 'JPEG', 10, y, w, h);
+      y += h + 8;
+    }
+    return pdf.output('blob');
+  } finally { box.remove(); }
+}
+async function modSend(week, r) {
+  busy('Preparo il PDF');
+  const fine = addDays(week, 6);
+  const dm = iso => dayFromIso(iso).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
+  const nome = `Modulo ore ${db.user ? db.user.last : ''} ${dm(week).replace('/', '-')} al ${dm(fine).replace('/', '-')}.pdf`.replace(/\s+/g, ' ');
+  const text = `Modulo ore settimana dal ${dm(week)} al ${dm(fine)} – ${fullName()}`;
+  let file;
+  try { file = new File([await modPdf(r)], nome, { type: 'application/pdf' }); }
+  catch (e) { return openDialog(`<h3>Errore</h3><p>Non riesco a creare il PDF: serve la connessione la prima volta. Puoi usare "Salva PDF / stampa".</p><button class="btn" value="back">Indietro</button>`, () => setTimeout(() => modShow(week), 50)); }
+  const c = cfg();
+  openDialog(`
+    <h3>📤 Invia il modulo</h3>
+    <p>${esc(nome)}</p>
+    <p class="note">Si apre la condivisione del telefono: scegli WhatsApp${c.autorizzaNome ? ` e poi ${esc(c.autorizzaNome)}` : ''}, oppure Mail.</p>
+    <button class="btn" value="share">📤 Condividi il PDF</button>
+    <button class="btn ghost" value="back">Indietro</button>`, async a => {
+    if (a === 'back') return setTimeout(() => modShow(week), 50);
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: nome, text }); } catch (e) { /* annullato */ }
+    } else {
+      // Telefono senza condivisione file: scarica il PDF e apre WhatsApp con il messaggio
+      const url = URL.createObjectURL(file);
+      const link = document.createElement('a'); link.href = url; link.download = nome; document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      window.open(`https://wa.me/${c.autorizzaTelefono || ''}?text=${encodeURIComponent(text + ' (PDF scaricato, allegalo qui)')}`, '_blank');
+    }
+    setTimeout(() => modShow(week), 300);
+  });
+}
 function modShow(week) {
   const r = modDoc(week);
   openDialog(`
@@ -1047,12 +1103,14 @@ function modShow(week) {
     <p class="note">${r.turni ? `${r.turni} turn${r.turni === 1 ? 'o' : 'i'} · ${hm(r.tot)} ore${r.moduli > 1 ? ` · ${r.moduli} moduli (più di 4 cantieri)` : ''}` : 'Nessuna timbratura in questa settimana.'}</p>
     <div class="mod-wrap"><div class="mod-scale">${r.html}</div></div>
     <div class="menu">
-      <button class="btn" value="print">📄 Salva PDF / stampa</button>
+      <button class="btn" value="send" ${r.turni ? '' : 'disabled'}>📤 Invia a ${esc(cfg().autorizzaNome || 'responsabile')}</button>
+      <button class="btn ghost" value="print">📄 Salva PDF / stampa</button>
       <div class="row"><button class="btn ghost" value="prev">◀ Sett. prima</button><button class="btn ghost" value="next">Sett. dopo ▶</button></div>
       <div class="row"><button class="btn ghost" value="set">⚙️ Impostazioni</button><button class="btn ghost" value="back">Chiudi</button></div>
     </div>`, a => {
     if (a === 'prev' || a === 'next') { modWeek = addDays(week, a === 'prev' ? -7 : 7); return setTimeout(() => modShow(modWeek), 50); }
     if (a === 'set') return setTimeout(() => modSettings(week), 50);
+    if (a === 'send') return setTimeout(() => modSend(week, r), 50);
     if (a === 'back') return;
     if (a === 'print') setTimeout(() => {
       $('#printArea').innerHTML = `<div class="mod-print">${r.html}</div>`;
