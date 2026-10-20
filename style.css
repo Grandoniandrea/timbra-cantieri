@@ -379,3 +379,19 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
 .pp-ore > span em { display: block; font-style: normal; font-size: 12px; color: var(--muted); }
 .pp-ore > span em.dop { color: #b42318; }
 .pp-ore select { width: auto; min-width: 128px; flex: none; }
+/* Specchietto ore con i colori GE3CO: grigio (#575756) se mancano ore, verde (#95c11f) se giusto, rosso se sfora */
+.o-under { background: #ececeb; color: #575756; }
+.o-under .ore-bar span { background: #575756; }
+.o-ok { background: #eef6d9; color: #3d5208; }
+.o-ok .ore-bar span { background: #95c11f; }
+.ore-cnt .o-under { background: #575756; color: #fff; }
+.ore-cnt .o-ok { background: #95c11f; color: #1f2a05; }
+@media (prefers-color-scheme: dark) {
+  .o-under { background: #2c2c2b; color: #d6d6d4; }
+  .o-under .ore-bar span { background: #a3a3a1; }
+  .o-ok { background: #24300c; color: #c5e27a; }
+  .ore-cnt .o-under { background: #575756; color: #fff; }
+  .ore-cnt .o-ok { background: #95c11f; color: #1f2a05; }
+}
+.ore-cnt i { white-space: nowrap; }
+.ore-box summary b { white-space: nowrap; }

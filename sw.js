@@ -1,5 +1,5 @@
 // Cache per funzionare anche senza rete. Cambia VERSION a ogni aggiornamento.
-const VERSION = 'tc-43';
+const VERSION = 'tc-44';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'icon.svg', 'logo.png', 'logo-dark.png', 'manifest.webmanifest'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
