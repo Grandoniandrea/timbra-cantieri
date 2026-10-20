@@ -27,11 +27,13 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 37;
+const APP_VERSION = 38;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
 db.endpoint = db.endpoint || DEFAULT_ENDPOINT;
+// Codice di accesso aziendale: arriva dal link di invito (?codice=…) e accompagna ogni richiesta allo script
+const ep = q => `${db.endpoint}?${q}&codice=${encodeURIComponent(db.codice || '')}`;
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('Impossibile salvare su questo telefono'); }
   render();
@@ -556,7 +558,7 @@ let intSeen = null;
 async function syncInterventi() {
   if (!db.endpoint || !db.user || navigator.onLine === false) return;
   try {
-    const res = await withTimeout(fetch(`${db.endpoint}?azione=interventi&nome=${encodeURIComponent(fullName())}`), 20000);
+    const res = await withTimeout(fetch(ep(`azione=interventi&nome=${encodeURIComponent(fullName())}`)), 20000);
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.interventi)) return;
     const prima = new Set((db.interventi || []).map(x => x.id));
@@ -638,7 +640,7 @@ function intView(id) {
 async function intShowShot(x) {
   openDialog('<h3>🖼️ Segnalazione</h3><p>Carico l\'immagine…</p><button class="btn ghost" value="back">Indietro</button>', () => setTimeout(() => intView(x.id), 50));
   try {
-    const res = await withTimeout(fetch(`${db.endpoint}?azione=fotointervento&tipo=screenshot&id=${encodeURIComponent(x.id)}`), 30000);
+    const res = await withTimeout(fetch(ep(`azione=fotointervento&tipo=screenshot&id=${encodeURIComponent(x.id)}`)), 30000);
     const out = await res.json();
     if (!dlg.open) return;
     openDialog(`<h3>🖼️ Segnalazione</h3>${out.foto ? `<img class="int-shot" src="${out.foto}" alt="Segnalazione">` : '<p>Immagine non disponibile.</p>'}
@@ -795,7 +797,7 @@ function doppi(squadre) {
 async function syncPlan() {
   if (!db.endpoint || navigator.onLine === false) return;
   try {
-    const res = await withTimeout(fetch(`${db.endpoint}?azione=programma`), 20000);
+    const res = await withTimeout(fetch(ep('azione=programma')), 20000);
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.squadre)) return;
     const next = { squadre: out.squadre, at: Date.now() };
@@ -1347,9 +1349,10 @@ async function flush() {
     // Corpo text/plain: richiesta "semplice", Google Apps Script la accetta senza preflight CORS.
     const res = await fetch(db.endpoint, {
       method: 'POST',
-      body: JSON.stringify({ user: { name: fullName(), device: db.user.device }, ops }),
+      body: JSON.stringify({ user: { name: fullName(), device: db.user.device }, ops, codice: db.codice || '' }),
     });
     const out = await res.json();
+    if (!out.ok && out.error === 'codice' && !flush.warned) { flush.warned = true; toast('Per inviare le timbrature apri il link di invito del responsabile'); }
     if (out.ok) {
       const done = new Set(out.done);
       db = Object.assign(load(), { endpoint: db.endpoint, queue: (load().queue || []).filter(o => !done.has(o.opId)) });
@@ -1364,7 +1367,7 @@ async function flush() {
 async function syncSites() {
   if (!db.endpoint || navigator.onLine === false) return;
   try {
-    const res = await fetch(db.endpoint + '?azione=cantieri');
+    const res = await fetch(ep('azione=cantieri'));
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.cantieri)) return;
     if (out.config && JSON.stringify(out.config) !== JSON.stringify(db.config)) { db.config = out.config; save(); }
@@ -1482,7 +1485,7 @@ async function myAbsences() {
   busy('Carico le tue richieste');
   let server = [];
   try {
-    const res = await withTimeout(fetch(`${db.endpoint}?azione=assenze&device=${encodeURIComponent(db.user.device)}`), 20000);
+    const res = await withTimeout(fetch(ep(`azione=assenze&device=${encodeURIComponent(db.user.device)}`)), 20000);
     const out = await res.json();
     if (out.ok) server = out.assenze;
   } catch (e) { /* offline: si mostrano quelle salvate sul telefono */ }
@@ -1549,7 +1552,7 @@ let adminPwd = null; // solo in memoria: chiusa l'app, la password va reinserita
 let adminMonth = null; // 'AAAA-MM' scelto nel pannello
 let adminExtraCount = 0, adminAbsCount = 0;
 async function adminCall(azione, extra) {
-  const res = await fetch(db.endpoint, { method: 'POST', body: JSON.stringify({ admin: Object.assign({ password: adminPwd, azione }, extra || {}) }) });
+  const res = await fetch(db.endpoint, { method: 'POST', body: JSON.stringify({ codice: db.codice || '', admin: Object.assign({ password: adminPwd, azione }, extra || {}) }) });
   return res.json();
 }
 const monthNow = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
@@ -1581,7 +1584,11 @@ function adminLogin(msg) {
       adminPwd = String(fd.get('pwd') || '');
       busy('Controllo password');
       adminCall('leggi').then(out => {
-        if (out.ok) { adminExtraCount = out.extraInAttesa || 0; adminAbsCount = out.assenzeInAttesa || 0; adminHome(); }
+        if (out.ok) {
+          adminExtraCount = out.extraInAttesa || 0; adminAbsCount = out.assenzeInAttesa || 0;
+          if (out.codice && db.codice !== out.codice) { db.codice = out.codice; resyncAll(); save(); }
+          adminHome();
+        }
         else if (out.error === 'nopass') { adminPwd = null; adminCreatePassword(); }
         else { adminPwd = null; adminLogin(out.msg || 'Errore.'); }
       }).catch(() => { adminPwd = null; adminLogin('Serve la connessione internet.'); });
@@ -1606,6 +1613,24 @@ function adminCreatePassword(msg) {
     });
 }
 
+function adminInvite(codice) {
+  if (!codice) return fail('Il codice di accesso non è ancora attivo: nello script esegui una volta "attivaCodiceAccesso".');
+  if (db.codice !== codice) { db.codice = codice; save(); }
+  const link = `${location.origin}${location.pathname}?codice=${codice}`;
+  openDialog(`
+    <h3>🔗 Link di invito</h3>
+    <p>Mandalo a ogni operatore. Lo apre una volta sul suo telefono e da lì le timbrature vengono accettate. Chi non ha il link non può inviare né leggere niente.</p>
+    <input readonly value="${esc(link)}" onclick="this.select()">
+    <p class="note">Non pubblicarlo nei gruppi aperti. Se finisce in mani sbagliate si cambia rieseguendo "attivaCodiceAccesso" e mandando il link nuovo.</p>
+    <div class="menu">
+      <a class="btn" href="https://wa.me/?text=${encodeURIComponent('Apri questo link sul telefono per collegare l\'app Timbra Cantieri: ' + link)}" target="_blank" rel="noopener">📤 Invia su WhatsApp</a>
+      <button class="btn ghost" value="copy">Copia</button>
+      <button class="btn ghost" value="back">Indietro</button>
+    </div>`, a => {
+    if (a === 'copy') navigator.clipboard.writeText(link).then(() => toast('Link copiato'), () => {});
+    if (a === 'back') setTimeout(adminHome, 50);
+  });
+}
 function adminHome() {
   if (!db.adminDevice) { db.adminDevice = true; save(); }
   openDialog(`
@@ -1619,6 +1644,7 @@ function adminHome() {
       <button class="btn ghost" value="extra">⏱️ Ore extra da autorizzare${adminExtraCount ? ` <span class="badge">${adminExtraCount}</span>` : ''}</button>
       <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia${adminAbsCount ? ` <span class="badge">${adminAbsCount}</span>` : ''}</button>
       <button class="btn ghost" value="shifts">✏️ Modifica timbrature dei dipendenti</button>
+      <button class="btn ghost" value="invito">🔗 Link di invito per gli operatori</button>
       <button class="btn ghost" value="sede">📍 Sede per le timbrature</button>
       <button class="btn ghost" value="demo">${isDemo() ? '🧪 Disattiva la modalità prova' : '🧪 Modalità prova: timbra anche fuori sede'}</button>
       <button class="btn ghost" value="pwd">🔑 Cambia password</button>
@@ -1638,6 +1664,7 @@ function adminHome() {
       assenze: () => call('assenze', null, 'Carico ferie e permessi', out => adminAbsences(out.assenze)),
       pwd: adminChangePassword,
       sede: () => adminSede(),
+      invito: () => call('codice', null, 'Preparo il link', out => adminInvite(out.codice)),
       demo: () => { setDemo(!isDemo()); adminHome(); },
       reset: adminReset,
       logout: () => { adminPwd = null; toast('Uscito dall\'area responsabile'); },
@@ -2024,6 +2051,18 @@ function adminChangePassword(msg) {
 // Link di collegamento che il responsabile manda ai dipendenti: ...?collega=<URL web app>
 function handleConnect() {
   const params = new URLSearchParams(location.search);
+  const codice = params.get('codice');
+  if (codice && /^[A-Za-z0-9]{6,40}$/.test(codice)) {
+    db.codice = codice;
+    if (db.user) resyncAll();
+    save();
+    if (!params.get('collega')) {
+      history.replaceState(null, '', location.pathname);
+      syncSites();
+      toast('Telefono abilitato al registro aziendale ✓');
+      return false;
+    }
+  }
   const url = params.get('collega');
   if (!url) return false;
   history.replaceState(null, '', location.pathname);

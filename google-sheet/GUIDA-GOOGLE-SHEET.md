@@ -57,3 +57,14 @@ Per installarle nello script già in uso, senza perdere ID del foglio, nome e te
 5. Salva, poi **Gestisci deployment → ✏️ → Nuova versione → Esegui il deployment**.
 6. Esegui una volta **attivaAvvisiImmediati** e autorizza: Google chiede anche il permesso
    per **Google Drive**, serve per salvare le foto degli interventi.
+
+## Codice di accesso (da fare per primo)
+Senza codice chiunque conosca l'indirizzo dello script può inviare timbrature false o leggere interventi e programma.
+1. Copia da `Codice.gs` la sezione "Codice di accesso" (funzioni `codiceOk_` e `attivaCodiceAccesso`),
+   le righe che la usano in `doPost` e `doGet`, il `case 'codice'` e la riga `codice:` nel `default` di `admin_`.
+2. Salva e pubblica una **nuova versione** del deployment.
+3. Esegui una volta **attivaCodiceAccesso**: nel registro di esecuzione compare il link di invito.
+4. Il telefono del responsabile si abilita da solo entrando nell'Area responsabile.
+   Poi: Area responsabile → **🔗 Link di invito per gli operatori** → Invia su WhatsApp a ogni operatore,
+   che lo apre una volta sul suo telefono.
+Da quel momento i telefoni senza link non possono più inviare né leggere niente.

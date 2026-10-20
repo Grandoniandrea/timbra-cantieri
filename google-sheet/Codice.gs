@@ -55,12 +55,29 @@ function configura() {
 
 // ---------- Ricezione dall'app ----------
 
+// ---------- Codice di accesso ----------
+// Finché non è attivo l'app funziona come prima. Dopo "attivaCodiceAccesso" lo script accetta solo
+// i telefoni che hanno aperto il link di invito (Area responsabile → Link di invito).
+function codiceOk_(c) {
+  const giusto = PropertiesService.getScriptProperties().getProperty('CODICE_ACCESSO');
+  return !giusto || String(c || '') === giusto;
+}
+/** Esegui una volta (o di nuovo per cambiarlo): crea il codice e scrive il link di invito nel registro di esecuzione. */
+function attivaCodiceAccesso() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let c = '';
+  for (let i = 0; i < 16; i++) c += chars.charAt(Math.floor(Math.random() * chars.length));
+  PropertiesService.getScriptProperties().setProperty('CODICE_ACCESSO', c);
+  Logger.log('Codice attivo. Link di invito: https://grandoniandrea.github.io/timbra-cantieri/?codice=' + c);
+}
+
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     const body = JSON.parse(e.postData.contents);
     if (body.admin) return json_(admin_(body.admin));
+    if (!codiceOk_(body.codice)) return json_({ ok: false, error: 'codice' });
     const ops = Array.isArray(body.ops) ? body.ops : [];
     const ok = [];
     ops.forEach(op => {
@@ -81,6 +98,7 @@ function doPost(e) {
 
 // Apri l'URL della web app nel browser per verificare che funzioni.
 function doGet(e) {
+  if (e && e.parameter && e.parameter.azione && !codiceOk_(e.parameter.codice)) return json_({ ok: false, error: 'codice' });
   if (e && e.parameter && e.parameter.azione === 'programma') return json_(programmaPubblico_(e));
   if (e && e.parameter && e.parameter.azione === 'interventi') return json_(interventiPubblico_(e));
   if (e && e.parameter && e.parameter.azione === 'fotointervento') {
@@ -166,6 +184,7 @@ function admin_(req) {
     case 'modifica': modificaTimbratura_(req.t); return { ok: true };
     case 'elimina': remove_(req.id); return { ok: true };
     case 'extra': return { ok: true, extra: extraInAttesa_() };
+    case 'codice': return { ok: true, codice: PropertiesService.getScriptProperties().getProperty('CODICE_ACCESSO') || '' };
     case 'programma': return { ok: true, squadre: programma_(req.da, req.a), operatori: operatori_(), cantieri: tuttiCantieri_() };
     case 'salvaprogramma': salvaProgramma_(req.da, req.a, req.squadre);
       return { ok: true, squadre: programma_(req.da, req.a), operatori: operatori_(), cantieri: tuttiCantieri_() };
@@ -187,6 +206,7 @@ function admin_(req) {
       return { ok: true };
     }
     default: return { ok: true, cantieri: tuttiCantieri_(), extraInAttesa: extraInAttesa_().length,
+      codice: PropertiesService.getScriptProperties().getProperty('CODICE_ACCESSO') || '',
       assenzeInAttesa: assenze_().filter(a => a.stato === ASS_ATTESA).length };
   }
 }
