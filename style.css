@@ -323,3 +323,5 @@ a.btn { display: flex; align-items: center; justify-content: center; text-decora
   .mod-print .mod-cut { height: 0; }
 }
 @page { size: A4 portrait; margin: 10mm; }
+.mod-cal { display: flex !important; align-items: center; gap: 10px; font-weight: 700; }
+.mod-cal input { flex: 1; }

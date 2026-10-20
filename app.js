@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 35;
+const APP_VERSION = 36;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -968,24 +968,17 @@ const MOD_GIORNI = ['LUN', 'MAR', 'MER', 'GIO', 'VEN', 'SAB', 'DOM'];
 const MOD_BLOCCHI = 4;
 const hm = ms => { const m = Math.round(ms / 60000); return `${Math.floor(m / 60)}:${pad(m % 60)}`; };
 let modWeek = null;
-function modPick() {
+// Si apre già compilato sulla settimana scorsa (si consegna il martedì per la settimana prima)
+function modPick() { modShow(modWeek || addDays(mondayOf(new Date()), -7)); }
+function modSettings(week) {
   const m = db.modulo || {};
-  // Si consegna il martedì per la settimana prima: di default la settimana scorsa
-  const def = modWeek || addDays(mondayOf(new Date()), -7);
   openDialog(`
-    <h3>📝 Modulo ore settimanale</h3>
-    <p>${esc(fullName() || 'Operatore')}</p>
-    <label>Settimana dal (lunedì)<input type="date" name="dal" required value="${def}"></label>
+    <h3>⚙️ Impostazioni modulo</h3>
     <label>Tipologia intervento<input name="tipo" maxlength="30" value="${esc(m.tipo || 'Ingombranti')}"></label>
     <label>Prima del cantiere (facoltativo)<input name="pref" maxlength="20" value="${esc(m.pref || '')}" placeholder="es. Geofor → Geofor Cascina"></label>
-    <button class="btn" value="gen">Genera modulo</button>
-    <button class="btn ghost" value="" formnovalidate>Chiudi</button>`, (a, fd) => {
-    if (a !== 'gen') return;
-    const dal = String(fd.get('dal') || def);
-    modWeek = mondayOf(dayFromIso(dal));
-    db.modulo = { tipo: String(fd.get('tipo') || '').trim(), pref: String(fd.get('pref') || '').trim() };
-    save();
-    setTimeout(() => modShow(modWeek), 50);
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Annulla</button><button class="btn" value="ok">Salva</button></div>`, (a, fd) => {
+    if (a === 'ok') { db.modulo = { tipo: String(fd.get('tipo') || '').trim(), pref: String(fd.get('pref') || '').trim() }; save(); }
+    setTimeout(() => modShow(week), 50);
   });
 }
 function modBlocks(week) {
@@ -1009,10 +1002,16 @@ function modDoc(week) {
   const nome = db.user ? `${db.user.last} ${db.user.first}`.toUpperCase() : '';
   const pagine = [];
   for (let i = 0; i < Math.max(1, blocks.length); i += MOD_BLOCCHI) pagine.push(blocks.slice(i, i + MOD_BLOCCHI));
+  // Ore di cantiere fisse: ogni turno vale oreTurno ore, con l'orario di servizio del turno (06–11 o 13–18)
+  const ore = cfg().oreTurno;
+  const orari = s => {
+    const pom = (fascia(s.start) || {}).nome === 'Pomeriggio' || new Date(s.start).getHours() >= 12;
+    const h0 = pom ? 13 : 6;
+    return { in: `${pad(h0)}:00`, out: `${pad(h0 + Math.floor(ore))}:${pad(Math.round((ore % 1) * 60))}`, tot: hm(ore * 3600000) };
+  };
   const cell = (b, d, k) => {
     const s = b && b.giorni[d];
-    if (!s) return '<td></td>';
-    return `<td>${k === 'in' ? fmtTime(s.start) : k === 'out' ? fmtTime(s.end) : hm(s.end - s.start)}</td>`;
+    return s ? `<td>${orari(s)[k === 'in' ? 'in' : k === 'out' ? 'out' : 'tot']}</td>` : '<td></td>';
   };
   const block = b => `
     <tr class="mod-r1"><td class="mod-lab" rowspan="3"><div><span>cantiere</span><b>${b ? esc([m.pref, b.cantiere].filter(Boolean).join(' ')) : ''}</b></div>
@@ -1037,29 +1036,38 @@ function modDoc(week) {
       Il lavoratore sarà chiamato a rispondere in caso di anomalia tra quanto da esso dichiarato e quanto previsto dagli ordini di servizio. La ripetizione di eventuali abusi sarà punita conformemente a quanto prevede il nostro CCNL.</p>
     </div>
   </div>`;
-  const tot = shifts.reduce((t, s) => t + (s.end - s.start), 0);
+  const tot = shifts.length * cfg().oreTurno * 3600000;
   return { html: pagine.map(one).join('<div class="mod-cut"></div>'), turni: shifts.length, tot, moduli: pagine.length };
 }
 function modShow(week) {
   const r = modDoc(week);
   openDialog(`
     <h3>📝 Modulo ore</h3>
+    <label class="mod-cal">📅 Settimana del<input type="date" id="modDate" value="${week}"></label>
     <p class="note">${r.turni ? `${r.turni} turn${r.turni === 1 ? 'o' : 'i'} · ${hm(r.tot)} ore${r.moduli > 1 ? ` · ${r.moduli} moduli (più di 4 cantieri)` : ''}` : 'Nessuna timbratura in questa settimana.'}</p>
     <div class="mod-wrap"><div class="mod-scale">${r.html}</div></div>
     <div class="menu">
       <button class="btn" value="print">📄 Salva PDF / stampa</button>
       <div class="row"><button class="btn ghost" value="prev">◀ Sett. prima</button><button class="btn ghost" value="next">Sett. dopo ▶</button></div>
-      <button class="btn ghost" value="back">Indietro</button>
+      <div class="row"><button class="btn ghost" value="set">⚙️ Impostazioni</button><button class="btn ghost" value="back">Chiudi</button></div>
     </div>`, a => {
     if (a === 'prev' || a === 'next') { modWeek = addDays(week, a === 'prev' ? -7 : 7); return setTimeout(() => modShow(modWeek), 50); }
-    if (a === 'back') return setTimeout(modPick, 50);
+    if (a === 'set') return setTimeout(() => modSettings(week), 50);
+    if (a === 'back') return;
     if (a === 'print') setTimeout(() => {
       $('#printArea').innerHTML = `<div class="mod-print">${r.html}</div>`;
       document.body.classList.add('print-modulo');
-      window.print();
-      setTimeout(() => { document.body.classList.remove('print-modulo'); modShow(week); }, 300);
+      // Aspetta che il logo sia caricato, altrimenti nel PDF non compare
+      const imgs = [...document.querySelectorAll('#printArea img')];
+      Promise.all(imgs.map(i => i.complete ? null : new Promise(ok => { i.onload = i.onerror = ok; setTimeout(ok, 3000); }))).then(() => {
+        window.print();
+        setTimeout(() => { document.body.classList.remove('print-modulo'); modShow(week); }, 300);
+      });
     }, 50);
   });
+  // Scelta del giorno dal calendario: il modulo si ricompila da solo sulla settimana di quel giorno
+  const cal = $('#modDate');
+  if (cal) cal.onchange = () => { if (cal.value) { modWeek = mondayOf(dayFromIso(cal.value)); modShow(modWeek); } };
   // Anteprima rimpicciolita per stare nello schermo del telefono
   const wrap = $('#dlgBody .mod-wrap'), sc = $('#dlgBody .mod-scale');
   if (wrap && sc) {
