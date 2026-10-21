@@ -426,3 +426,22 @@ dialog input.dpi-q { width: 44px; min-height: 36px; padding: 4px 6px; text-align
 .dpi-gear { flex: none; width: 40px; height: 40px; display: grid; place-items: center; font-size: 26px; border-radius: 10px; background: rgba(255,255,255,.55); }
 @media (prefers-color-scheme: dark) { .dpi-gear { background: rgba(0,0,0,.25); } }
 .dpi-oprow { display: flex !important; align-items: center; gap: 10px; }
+
+/* Demo guidata */
+#demoTour { position: fixed; inset: auto 10px max(10px, env(safe-area-inset-bottom)) 10px; margin: 0; width: auto; max-width: 540px;
+  margin-inline: auto; border: 0; border-radius: 16px; padding: 12px 14px; background: #1f2a24; color: #fff;
+  box-shadow: 0 10px 30px rgba(0,0,0,.35); display: none; gap: 6px; font-size: 14px; }
+#demoTour:popover-open { display: grid; }
+#demoTour .dt-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: #b7e36a; }
+#demoTour .dt-dots { display: flex; gap: 3px; }
+#demoTour .dt-dots i { width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,.25); }
+#demoTour .dt-dots i.on { background: #95c11f; }
+#demoTour strong { font-size: 17px; }
+#demoTour p { margin: 0; color: #d9e2dc; line-height: 1.35; }
+#demoTour .dt-btns { display: flex; gap: 6px; margin-top: 4px; }
+#demoTour button { font: inherit; font-weight: 700; border-radius: 10px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.08); color: #fff; min-height: 40px; padding: 6px 10px; cursor: pointer; }
+#demoTour button:disabled { opacity: .35; }
+#demoTour .dt-go { flex: 1; background: #95c11f; color: #1c2604; border-color: #95c11f; }
+#demoTour .dt-x { width: 40px; padding: 0; }
+body.demo-on dialog[open] { position: fixed; inset: 10px 0 auto; z-index: 50; margin: 0 auto; max-height: calc(100dvh - 220px); overflow: auto; box-shadow: 0 0 0 100vmax rgba(0,0,0,.45); }
+.demo-btn { border-color: #95c11f !important; }

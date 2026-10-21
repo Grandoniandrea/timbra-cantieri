@@ -2,6 +2,8 @@
 
 // ---------- Dati ----------
 const KEY = 'timbra-cantieri.v1';
+// Stato della demo guidata (vedi sezione Demo)
+const DEMO = { on: false, step: 0, auto: null, srv: null, tour: null };
 const COLORS = ['#ea580c', '#16a34a', '#0d9488', '#2563eb', '#7c3aed', '#db2777', '#ca8a04', '#64748b'];
 const DEFAULT_SITES = [
   'PISA', 'SAN GIULIANO TERME', 'CASCINA', 'CALCINAIA', 'PONTEDERA',
@@ -27,7 +29,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 49;
+const APP_VERSION = 50;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -35,6 +37,8 @@ db.endpoint = db.endpoint || DEFAULT_ENDPOINT;
 // Codice di accesso aziendale: arriva dal link di invito (?codice=…) e accompagna ogni richiesta allo script
 const ep = q => `${db.endpoint}?${q}&codice=${encodeURIComponent(db.codice || '')}`;
 function save() {
+  // Durante la demo non si scrive niente sul telefono: i dati veri restano com'erano
+  if (DEMO.on) { render(); return; }
   try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast('Impossibile salvare su questo telefono'); }
   render();
   setTimeout(flush, 0);
@@ -88,6 +92,7 @@ function setDemo(on) {
   toast(on ? `Modalità prova attiva fino alle ${fmtTime(db.demoUntil)}` : 'Modalità prova disattivata');
 }
 async function requireSede(what, cb) {
+  if (DEMO.on) return cb(null);
   if (isDemo()) {
     // In prova si registra comunque la posizione, ma senza bloccare
     openDialog(`<h3>🧪 Modalità prova</h3><p>Timbratura consentita anche fuori sede…</p>`);
@@ -214,7 +219,7 @@ function render() {
   renderPlan();
 
   // Cantieri
-  const managed = !!db.endpoint;
+  const managed = !!db.endpoint || DEMO.on;
   $('#btnAddSite').hidden = managed;
   $('#sitesNote').hidden = !managed;
   $('#foot').textContent = (managed
@@ -276,7 +281,9 @@ function openDialog(html, onSubmit) {
       if (onSubmit(btn.value, new FormData($('#dlgBody'))) === false) { e.preventDefault(); }
     }
   };
-  if (!dlg.open) dlg.showModal();
+  // In demo la finestra non è modale, così la barra della demo resta cliccabile sopra
+  if (!dlg.open) { if (DEMO.on) dlg.show(); else dlg.showModal(); }
+  if (DEMO.on) setTimeout(demoBringTour, 0);
 }
 
 function colorPicker(current) {
@@ -445,6 +452,7 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
   <h3>Menu</h3>
   <p>${esc(syncStatus())}</p>
   <div class="menu">
+    <button class="btn ghost demo-btn" value="demo">🎬 Demo: guarda cosa fa l'app</button>
     <button class="btn" value="share">📤 Invia le mie timbrature al responsabile (WhatsApp)</button>
     <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia</button>
     <button class="btn ghost" value="paga">💶 Stima busta paga</button>
@@ -455,6 +463,7 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
   <h3>Menu</h3>
   <p>${esc(syncStatus())}</p>
   <div class="menu">
+    ${DEMO.on ? '<button class="btn" value="demoexit">🎬 Esci dalla demo</button>' : '<button class="btn ghost demo-btn" value="demo">🎬 Demo: guarda cosa fa l\'app</button>'}
     ${db.endpoint ? '<button class="btn" value="admin">🔒 Area responsabile</button>' : ''}
     <button class="btn ghost" value="share">📤 Invia timbrature del mese</button>
     <button class="btn ghost" value="assenze">🌴 Ferie, permessi, malattia</button>
@@ -467,6 +476,8 @@ $('#btnMenu').onclick = () => openDialog(isEmployee() ? `
     <button class="btn ghost" value="nfc">🏷️ Link da scrivere sul tag NFC</button>
     <button class="btn ghost" value="">Chiudi</button>
   </div>`, action => {
+  if (action === 'demo') return setTimeout(demoStart, 50);
+  if (action === 'demoexit') return setTimeout(demoStop, 50);
   if (action === 'share') shareMonth();
   if (action === 'assenze') setTimeout(myAbsences, 50);
   if (action === 'paga') setTimeout(payPick, 50);
@@ -638,6 +649,7 @@ function intView(id) {
   });
 }
 async function intShowShot(x) {
+  if (DEMO.on) return openDialog(`<h3>🖼️ Segnalazione</h3><img class="int-shot" src="${DEMO.srv.foto.shot}" alt="Segnalazione"><button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(() => intView(x.id), 50));
   openDialog('<h3>🖼️ Segnalazione</h3><p>Carico l\'immagine…</p><button class="btn ghost" value="back">Indietro</button>', () => setTimeout(() => intView(x.id), 50));
   try {
     const res = await withTimeout(fetch(ep(`azione=fotointervento&tipo=screenshot&id=${encodeURIComponent(x.id)}`)), 30000);
@@ -1023,6 +1035,230 @@ function dpiCapiEdit() {
     if (nuovo && !lista.some(c => sameName(c.nome, nuovo))) lista.push({ nome: nuovo.charAt(0).toUpperCase() + nuovo.slice(1), taglia: '', mesi: 12, attivo: true });
     setTimeout(() => call('dpicapi', { capi: lista }, 'Salvo i capi', out => { dpiData = out; toast('Capi salvati ✓'); dpiHome(); }), 50);
   });
+}
+
+// ---------- 🎬 Demo guidata ----------
+// Mostra tutta l'app con dati finti: non tocca le timbrature vere, non scrive sul telefono e non invia niente al foglio.
+// All'uscita si ricaricano i dati veri, che nel frattempo non sono mai stati modificati.
+const isDemoTour = () => DEMO.on;
+
+function demoPhoto(label, piena) {
+  const c = document.createElement('canvas'); c.width = 640; c.height = 480;
+  const g = c.getContext('2d');
+  const sky = g.createLinearGradient(0, 0, 0, 300); sky.addColorStop(0, '#9ec5e8'); sky.addColorStop(1, '#dfe9f2');
+  g.fillStyle = sky; g.fillRect(0, 0, 640, 480);
+  g.fillStyle = '#b8b2a7'; g.fillRect(0, 300, 640, 180);          // marciapiede
+  g.fillStyle = '#8c7b6b'; g.fillRect(40, 120, 220, 180);          // muro
+  g.fillStyle = '#6b8e3a'; g.fillRect(500, 200, 110, 100);         // siepe
+  if (piena) {
+    g.fillStyle = '#7a4b2a'; g.fillRect(280, 250, 200, 70); g.fillRect(280, 215, 200, 45); // divano
+    g.fillStyle = '#5c381f'; g.fillRect(270, 230, 22, 90); g.fillRect(468, 230, 22, 90);
+    g.fillStyle = '#c9c4b8'; g.fillRect(150, 330, 90, 60);          // sedia
+  }
+  g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(0, 420, 640, 60);
+  g.fillStyle = '#fff'; g.font = 'bold 30px sans-serif'; g.fillText(label, 20, 460);
+  return c.toDataURL('image/jpeg', 0.8);
+}
+
+function demoBuild() {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const mon = mondayOf(today), lastMon = addDays(mon, -7);
+  const at = (iso, h, m) => { const d = dayFromIso(iso); d.setHours(h, m, 0, 0); return d.getTime(); };
+  const sites = DEFAULT_SITES.concat(['CALCI', 'VICOPISANO']).map((name, i) => ({ id: 'ds' + i, name, color: COLORS[i % COLORS.length] }));
+  const sid = n => sites.find(s => s.name === n).id;
+  const me = { first: 'Mario', last: 'Rossi', device: 'demo' };
+  // Timbrature di Mario: settimana scorsa e questa fino a ieri
+  const plan = [['CASCINA', 5, 28, 10, 55], ['PISA', 5, 31, 11, 2], ['CALCI', 5, 30, 10, 48], ['SAN GIULIANO TERME', 5, 26, 12, 10],
+    ['PONTEDERA', 5, 33, 10, 58], ['PISA', 5, 29, 10, 50]];
+  const shifts = [];
+  [lastMon, mon].forEach(w => plan.forEach((p, i) => {
+    const d = addDays(w, i);
+    if (dayFromIso(d) >= today) return;
+    shifts.push({ id: 'dsh' + d, siteId: sid(p[0]), start: at(d, p[1], p[2]), end: at(d, p[3], p[4]),
+      extra: p[3] >= 12 ? { motivo: 'Foratura', nota: 'attesa carro attrezzi' } : undefined });
+  }));
+  shifts.sort((a, b) => b.start - a.start);
+  // Programma della settimana (operatori finti)
+  const ops = ['Mario Rossi', 'Bianchi', 'Verdi', 'Neri', 'Russo', 'Ferrari', 'Esposito', 'Colombo'];
+  const sq = []; let k = 0;
+  const add = (g, t, c, o) => sq.push({ id: 'dq' + (k++), data: addDays(mon, g), turno: t, cantiere: c, operatori: o, nota: '' });
+  add(0, 'Mattina', 'CASCINA', ['Mario Rossi', 'Bianchi']); add(0, 'Mattina', 'PISA', ['Verdi', 'Neri']); add(0, 'Pomeriggio', 'PISA', ['Russo', 'Ferrari']);
+  add(1, 'Mattina', 'PISA', ['Mario Rossi', 'Esposito']); add(1, 'Pomeriggio', 'CASCINA', ['Mario Rossi', 'Bianchi']); add(1, 'Mattina', 'PONSACCO', ['Verdi']);
+  add(2, 'Mattina', 'CALCI', ['Mario Rossi', 'Neri']); add(2, 'Pomeriggio', 'VICOPISANO', ['Russo', 'Colombo']); add(2, 'Mattina', 'PISA', ['Ferrari', 'Bianchi']);
+  add(3, 'Mattina', 'SAN GIULIANO TERME', ['Mario Rossi', 'Verdi']); add(3, 'Pomeriggio', 'PISA', ['Esposito', 'Neri']); add(3, 'Pomeriggio', 'MONTOPOLI', ['Ferrari', 'Russo', 'Verdi']);
+  add(4, 'Mattina', 'PONTEDERA', ['Mario Rossi', 'Colombo']); add(4, 'Pomeriggio', 'PISA', ['Bianchi', 'Neri', 'Russo']);
+  add(5, 'Mattina', 'PISA', ['Mario Rossi', 'Ferrari']); add(5, 'Mattina', 'CASCINA', ['Esposito']);
+  sq.push({ id: 'dqf', data: addDays(mon, 2), turno: 'Ferie', cantiere: 'FERIE', operatori: ['Esposito'], nota: '' });
+  sq.push({ id: 'dqm', data: addDays(mon, 4), turno: 'Malattia', cantiere: 'MALATTIA', operatori: ['Ferrari'], nota: '' });
+  const foto = { shot: demoPhoto('Segnalazione: ritiro divano', true), prima: demoPhoto('PRIMA', true), dopo: demoPhoto('DOPO', false) };
+  const iso = isoDay(today);
+  const interventi = [
+    { id: 'di1', data: iso, cliente: 'Maria Bianchi', indirizzo: 'Via Roma 12', localita: 'Pontedera', coord: '', cosa: 'Divano 3 posti, 2 sedie', note: 'Materiale in giardino, citofono Bianchi', assegnato: 'Mario Rossi', stato: 'Da fare', screenshot: true, fotoPrima: false, fotoDopo: false, creato: Date.now() },
+    { id: 'di2', data: iso, cliente: 'Luca Neri', indirizzo: 'Via Pisana 45', localita: 'Cascina', coord: '', cosa: 'Materasso e rete', note: '', assegnato: 'Tutti', stato: 'Da fare', screenshot: false, fotoPrima: false, fotoDopo: false, creato: Date.now() },
+    { id: 'di3', data: addDays(iso, -1), cliente: 'Anna Verdi', indirizzo: 'Via Dante 3', localita: 'Pisa', coord: '', cosa: 'Frigorifero', note: '', assegnato: 'Bianchi', stato: 'Fatto', fattoIl: Date.now() - 864e5, fattoDa: 'Bianchi', notaOp: 'Ritirato anche un mobiletto', screenshot: false, fotoPrima: true, fotoDopo: true, posChiusura: '', creato: Date.now() - 2 * 864e5 }];
+  const capi = [['Maglietta', 'maglia', 6], ['Felpa', 'maglia', 12], ['Pantalone', 'pantalone', 12], ['Jeans', 'pantalone', 12], ['Scarpe antinfortunistiche', 'scarpe', 12],
+    ['Giaccone', 'maglia', 24], ['Gilet alta visibilità', 'maglia', 12], ['Occhiali', '', 24], ['Caschetto', '', 48], ['Guanti', '', 1]].map(([nome, taglia, mesi]) => ({ nome, taglia, mesi, attivo: true }));
+  const cons = (id, d, op, capo, tg, q, mesi) => { const x = dayFromIso(d); x.setMonth(x.getMonth() + mesi); return { id, data: d, operatore: op, capo, taglia: tg, qta: q, scadenza: isoDay(x), note: '', consegna: id }; };
+  const dpi = { capi, taglie: { 'mario rossi': { maglia: 'L', pantalone: '48', scarpe: '43', note: '' }, bianchi: { maglia: 'XL', pantalone: '52', scarpe: '44', note: '' } },
+    consegne: [cons('dc1', addDays(iso, -380), 'Mario Rossi', 'Scarpe antinfortunistiche', '43', 1, 12), cons('dc2', addDays(iso, -90), 'Mario Rossi', 'Maglietta', 'L', 3, 6),
+      cons('dc3', addDays(iso, -350), 'Bianchi', 'Felpa', 'XL', 2, 12), cons('dc4', addDays(iso, -200), 'Verdi', 'Maglietta', 'M', 2, 6),
+      cons('dc5', addDays(iso, -30), 'Neri', 'Giaccone', 'L', 1, 24), cons('dc6', addDays(iso, -400), 'Russo', 'Caschetto', '', 1, 48)] };
+  // Timbrature di tutti (per statistiche e report del responsabile)
+  const tutte = [];
+  // Le stesse squadre ripetute nelle 4 settimane precedenti, per avere statistiche e report pieni
+  [0, -7, -14, -21, -28].forEach(off => sq.filter(s => !isAss(s.turno) && dayFromIso(addDays(s.data, off)) < today).forEach(s0 => {
+    const s = Object.assign({}, s0, { id: s0.id + 'w' + off, data: addDays(s0.data, off) });
+    s.operatori.forEach((o, j) => {
+    const h0 = s.turno === 'Mattina' ? 5 : 12;
+    tutte.push({ id: s.id + j, dip: o, cantiere: s.cantiere, start: at(s.data, h0, 25 + j * 3), end: at(s.data, h0 + 5, 20 + j * 4),
+      extra: o === 'Verdi' && s.cantiere === 'PISA' ? 0.75 : 0, statoExtra: o === 'Verdi' && s.cantiere === 'PISA' ? (off ? 'Autorizzato' : 'Da autorizzare') : '', turno: s.turno, sede: 'OK', posIn: '', posOut: '' });
+    });
+  }));
+  const db0 = {
+    sites, shifts, active: null, user: me, queue: [], endpoint: null, adminDevice: true,
+    config: { oreTurno: 5, tolleranzaMin: 15, autorizzaNome: 'Responsabile', autorizzaTelefono: '', turni: [{ nome: 'Mattina', inizio: '05:00', fine: '11:00' }, { nome: 'Pomeriggio', inizio: '13:00', fine: '18:00' }], sede: { nome: 'Sede (demo)', lat: 43.67, lng: 10.43, raggio: 200 } },
+    plan: { squadre: sq, at: Date.now() }, interventi: interventi.filter(x => x.assegnato === 'Mario Rossi' || x.assegnato === 'Tutti'),
+    paga: { v: 2, oraria: 11.2, ore: 130, magg: 30, inps: 9.76, addiz: true, sind: 0, piu: 0 },
+    modulo: { tipo: 'Ingombranti', pref: '', prove: true }, oreOp: { 'mario rossi': 35 },
+  };
+  const srv = { ops: ops.map(nome => ({ nome, attivo: true, ore: nome === 'Mario Rossi' ? 35 : 30 })), sq, interventi, foto, dpi, tutte,
+    cantieri: sites.map(s => ({ nome: s.name, attivo: true, colore: s.color })),
+    extra: tutte.filter(t => t.statoExtra === 'Da autorizzare').map(t => ({ id: t.id, dip: t.dip, cantiere: t.cantiere, start: t.start, end: t.end, extra: t.extra, motivo: 'Guasto del mezzo', nota: 'compattatore fermo 40 minuti' })),
+    assenze: [{ id: 'da1', dip: 'Colombo', tipo: 'Ferie', dal: addDays(mon, 14), al: addDays(mon, 18), giorni: 5, ore: 0, nota: 'Vacanza', stato: 'Da approvare' }] };
+  return { db0, srv, mon, lastMon };
+}
+
+// Finto script Google: risponde alle richieste dell'area responsabile con i dati della demo
+function demoServer(azione, x) {
+  const s = DEMO.srv, ok = o => Promise.resolve(Object.assign({ ok: true }, o));
+  const dpiOut = () => ok({ capi: s.dpi.capi, taglie: s.dpi.taglie, consegne: s.dpi.consegne.slice().sort((a, b) => b.data.localeCompare(a.data)), operatori: s.ops });
+  const intOut = () => ok({ interventi: s.interventi, operatori: s.ops });
+  const inRange = d => (!x.da || d >= x.da) && (!x.a || d <= x.a);
+  switch (azione) {
+    case 'programma': return ok({ squadre: s.sq.filter(q => inRange(q.data)), operatori: s.ops, cantieri: s.cantieri });
+    case 'salvaprogramma': s.sq = s.sq.filter(q => !inRange(q.data)).concat(x.squadre || []); return ok({ squadre: s.sq.filter(q => inRange(q.data)), operatori: s.ops, cantieri: s.cantieri });
+    case 'operatori': s.ops = x.operatori; return ok({ operatori: s.ops });
+    case 'interventi': return intOut();
+    case 'salvaintervento': { const it = Object.assign({}, x.intervento); const i = s.interventi.findIndex(v => v.id === it.id);
+      const base = i >= 0 ? s.interventi[i] : { stato: 'Da fare', creato: Date.now(), fotoPrima: false, fotoDopo: false };
+      if (it.screenshot) { s.foto['shot' + it.id] = it.screenshot; it.screenshot = true; } else it.screenshot = base.screenshot || false;
+      const v = Object.assign({}, base, it); if (i >= 0) s.interventi[i] = v; else s.interventi.push(v); return intOut(); }
+    case 'eliminaintervento': s.interventi = s.interventi.filter(v => v.id !== x.id); return intOut();
+    case 'riapriintervento': s.interventi.forEach(v => { if (v.id === x.id) v.stato = 'Da fare'; }); return intOut();
+    case 'fotointervento': return ok({ foto: x.tipo === 'prima' ? s.foto.prima : x.tipo === 'dopo' ? s.foto.dopo : (s.foto['shot' + x.id] || s.foto.shot) });
+    case 'dpi': return dpiOut();
+    case 'dpiconsegna': { const c = x.consegna; const mesi = n => (s.dpi.capi.find(v => v.nome === n) || {}).mesi || 0;
+      c.righe.forEach((r, i) => { const d = dayFromIso(c.data); const m = mesi(r.capo); d.setMonth(d.getMonth() + m);
+        s.dpi.consegne.push({ id: c.id + i, data: c.data, operatore: c.operatore, capo: r.capo, taglia: r.taglia, qta: r.qta, scadenza: m ? isoDay(d) : '', note: c.note, consegna: c.id }); });
+      if (c.taglie) s.dpi.taglie[c.operatore.toLowerCase()] = c.taglie; return dpiOut(); }
+    case 'dpitaglie': s.dpi.taglie[String(x.operatore).toLowerCase()] = x.taglie; return dpiOut();
+    case 'dpicapi': s.dpi.capi = x.capi; return dpiOut();
+    case 'dpielimina': s.dpi.consegne = s.dpi.consegne.filter(c => c.id !== x.id); return dpiOut();
+    case 'timbrature': { const da = new Date(x.anno, x.mese, 1).getTime(), a = new Date(x.anno, x.mese + 1, 1).getTime();
+      return ok({ timbrature: s.tutte.filter(t => t.start >= da && t.start < a).sort((p, q) => q.start - p.start), cantieri: s.cantieri }); }
+    case 'report': { const da = new Date(x.anno, x.mese, 1).getTime(), a = new Date(x.anno, x.mese + 1, 1).getTime();
+      const ts = s.tutte.filter(t => t.start >= da && t.start < a), nomeMese = new Date(x.anno, x.mese, 1).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' });
+      const g = {}; ts.forEach(t => { const k = x.tipo === 'comuni' ? t.cantiere : t.dip; (g[k] = g[k] || { n: 0 }).n++; });
+      const righe = Object.entries(g).sort().map(([k, v]) => [k, v.n, v.n * 5]);
+      return ok({ nomeMese, intest: [x.tipo === 'comuni' ? 'Comune' : 'Dipendente', 'Turni', 'Totale ore'], righe, totale: ['TOTALE', ts.length, ts.length * 5] }); }
+    case 'extra': return ok({ extra: s.extra });
+    case 'decidi': s.extra = s.extra.filter(e => e.id !== x.id); return ok({ extra: s.extra });
+    case 'assenze': return ok({ assenze: s.assenze });
+    case 'decidiassenza': s.assenze.forEach(a => { if (a.id === x.id) a.stato = x.approva ? 'Approvata' : 'Rifiutata'; }); return ok({ assenze: s.assenze });
+    case 'codice': return ok({ codice: 'DEMO1234' });
+    case 'sede': return ok({ sede: cfg().sede });
+    case 'modifica': case 'elimina': return ok({});
+    case 'email': case 'pdf': case 'azzera': case 'cambiapassword': return Promise.resolve({ ok: false, msg: 'Nella demo questa funzione non invia niente.' });
+    default: return ok({ cantieri: s.cantieri, extraInAttesa: s.extra.length, assenzeInAttesa: s.assenze.filter(a => a.stato === 'Da approvare').length, codice: 'DEMO1234' });
+  }
+}
+
+const demoClose = () => { if (dlg.open) { dlg.oncancel = null; dlg.onclose = null; dlg.close(); } };
+const demoScroll = sel => { const el = sel && $(sel); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); else window.scrollTo({ top: 0, behavior: 'smooth' }); };
+const DEMO_STEPS = [
+  { t: 'Benvenuto', d: 'Questa è una prova con dati finti: l\'operatore Mario Rossi e i suoi colleghi. Le tue timbrature vere non vengono toccate.', run: () => { demoClose(); demoScroll(); } },
+  { t: 'Il programma dell\'operatore', d: 'Appena apre l\'app vede i suoi prossimi turni: cantiere, colleghi e doppio turno. Il cantiere di oggi è già segnato.', run: () => { demoClose(); demoScroll('#plan'); } },
+  { t: 'Timbrare l\'entrata', d: 'Si passa il telefono sulla card NFC in sede: il GPS controlla che sia lì e parte il timer delle 5 ore.', run: () => {
+      demoClose(); const s = db.sites.find(x => x.name === 'CASCINA'); db.active = { id: 'dact', siteId: s.id, start: Date.now() - (4 * 60 + 52) * 60000, posIn: null }; render(); demoScroll(); } },
+  { t: 'Interventi con foto', d: 'Il responsabile manda le segnalazioni dei cittadini. L\'operatore naviga fino all\'indirizzo, fa le foto prima e dopo e le invia su WhatsApp.', run: () => {
+      db.active = null; render(); intFoto.di1 = { prima: DEMO.srv.foto.prima, dopo: DEMO.srv.foto.dopo, nota: '' }; intView('di1'); } },
+  { t: 'Modulo ore settimanale', d: 'Il modulo cartaceo GE3CO si compila da solo con le timbrature: 5 ore fisse per cantiere. Si stampa o si invia in PDF.', run: () => { modShow(DEMO.lastMon); } },
+  { t: 'Stima della busta paga', d: 'Ogni operatore vede una stima del netto del mese. Le ore extra restano a parte finché non vengono autorizzate.', run: () => { payMode = 'fine'; payShow(monthNow()); } },
+  { t: 'Area del responsabile', d: 'Protetta da password e invisibile agli operatori. Da qui si gestisce tutto.', run: () => { adminPwd = 'demo'; adminExtraCount = DEMO.srv.extra.length; adminAbsCount = 1; adminHome(); } },
+  { t: 'Programma della settimana', d: 'Le squadre si compongono con le tendine. Lo specchietto mostra subito chi sfora le ore (rosso), chi deve ancora lavorare (grigio) e chi è a posto (verde).', run: () => { planHoursOpen = true; adminPlan(DEMO.mon); } },
+  { t: 'Ore extra da autorizzare', d: 'Se un turno supera le 5 ore l\'operatore indica il motivo. Il responsabile autorizza o rifiuta con un tocco.', run: () => { call('extra', null, 'Carico', out => adminExtra(out.extra)); } },
+  { t: 'Statistiche per cantiere', d: 'Le ore svolte su ogni cantiere nel mese, per tutti o per un singolo operatore. Utili anche per la fatturazione ai comuni.', run: () => {
+      adminMonth = monthNow(); call('timbrature', monthParts(adminMonth), 'Carico', out => { statsShifts = out.timbrature; statsSites = out.cantieri; adminStats(''); }); } },
+  { t: 'Interventi da assegnare', d: 'Il responsabile crea l\'intervento con lo screenshot della segnalazione e vede quelli fatti, con le foto e l\'ora.', run: () => { adminInterventi(); } },
+  { t: 'DPI e vestiario', d: 'Consegne, taglie e scadenze di ogni operatore. L\'app dice cosa è scaduto e prepara l\'elenco da ordinare.', run: () => { dpiLoad(dpiScadView); } },
+  { t: 'Fine della demo', d: 'In più: avvisi automatici al responsabile, report mensile via email, ferie e permessi, codice di accesso aziendale. Esci per tornare ai tuoi dati.', run: () => { demoClose(); demoScroll(); } },
+];
+function demoTourEl() {
+  if (DEMO.tour) return DEMO.tour;
+  const el = document.createElement('div');
+  el.id = 'demoTour'; el.setAttribute('popover', 'manual');
+  el.addEventListener('click', e => {
+    const b = e.target.closest('[data-dt]'); if (!b) return;
+    const a = b.dataset.dt;
+    if (a === 'next') demoGo(DEMO.step + 1); else if (a === 'prev') demoGo(DEMO.step - 1);
+    else if (a === 'auto') demoAuto(!DEMO.auto); else if (a === 'exit') demoStop();
+  });
+  document.body.appendChild(el);
+  return (DEMO.tour = el);
+}
+function demoBringTour() {
+  const el = DEMO.tour; if (!el || !DEMO.on) return;
+  try { if (el.matches(':popover-open')) el.hidePopover(); el.showPopover(); } catch (e) { el.style.display = 'block'; }
+}
+function demoPaint() {
+  const st = DEMO_STEPS[DEMO.step], n = DEMO_STEPS.length, last = DEMO.step === n - 1;
+  demoTourEl().innerHTML = `
+    <div class="dt-top"><b>🎬 Demo · ${DEMO.step + 1}/${n}</b><span class="dt-dots">${DEMO_STEPS.map((_, i) => `<i class="${i === DEMO.step ? 'on' : ''}"></i>`).join('')}</span></div>
+    <strong>${esc(st.t)}</strong><p>${esc(st.d)}</p>
+    <div class="dt-btns">
+      <button type="button" data-dt="prev" ${DEMO.step ? '' : 'disabled'} aria-label="Indietro">◀</button>
+      <button type="button" data-dt="auto">${DEMO.auto ? '⏸ Pausa' : '▶ Automatica'}</button>
+      ${last ? '<button type="button" class="dt-go" data-dt="exit">Esci dalla demo</button>' : '<button type="button" class="dt-go" data-dt="next">Avanti ▶</button>'}
+      ${last ? '' : '<button type="button" class="dt-x" data-dt="exit" aria-label="Esci dalla demo">✕</button>'}
+    </div>`;
+}
+function demoGo(i) {
+  if (!DEMO.on) return;
+  DEMO.step = Math.max(0, Math.min(DEMO_STEPS.length - 1, i));
+  demoPaint();
+  try { DEMO_STEPS[DEMO.step].run(); } catch (e) { console.warn('demo', e); }
+  setTimeout(demoBringTour, 60);
+  if (DEMO.auto && DEMO.step === DEMO_STEPS.length - 1) demoAuto(false);
+}
+function demoAuto(on) {
+  clearInterval(DEMO.auto); DEMO.auto = null;
+  if (on) DEMO.auto = setInterval(() => demoGo(DEMO.step + 1), 7000);
+  demoPaint(); demoBringTour();
+}
+function demoStart() {
+  if (DEMO.on) return;
+  const b = demoBuild();
+  DEMO.srv = b.srv; DEMO.mon = b.mon; DEMO.lastMon = b.lastMon;
+  DEMO.saved = { adminPwd, adminExtraCount, adminAbsCount };
+  demoClose();
+  DEMO.on = true;
+  db = b.db0;
+  document.body.classList.add('demo-on');
+  render();
+  demoGo(0);
+}
+function demoStop() {
+  clearInterval(DEMO.auto); DEMO.auto = null;
+  DEMO.on = false;
+  demoClose();
+  if (DEMO.tour) { try { DEMO.tour.hidePopover(); } catch (e) { /* */ } DEMO.tour.remove(); DEMO.tour = null; }
+  document.body.classList.remove('demo-on');
+  for (const k in intFoto) delete intFoto[k];
+  ({ adminPwd, adminExtraCount, adminAbsCount } = DEMO.saved || {});
+  // I dati veri non sono mai stati toccati: si ricaricano dal telefono
+  db = load(); db.queue = db.queue || []; db.endpoint = db.endpoint || DEFAULT_ENDPOINT;
+  render(); window.scrollTo({ top: 0 });
+  toast('Demo finita: sei tornato ai tuoi dati');
 }
 
 // ---------- Programma della settimana ----------
@@ -1765,6 +2001,7 @@ function syncStatus() {
 }
 let flushing = false;
 async function flush() {
+  if (DEMO.on) return;
   if (flushing || !db.endpoint || !db.queue.length || !db.user || navigator.onLine === false) return;
   flushing = true;
   try {
@@ -1975,6 +2212,7 @@ let adminPwd = null; // solo in memoria: chiusa l'app, la password va reinserita
 let adminMonth = null; // 'AAAA-MM' scelto nel pannello
 let adminExtraCount = 0, adminAbsCount = 0;
 async function adminCall(azione, extra) {
+  if (DEMO.on) return demoServer(azione, extra || {});
   const res = await fetch(db.endpoint, { method: 'POST', body: JSON.stringify({ codice: db.codice || '', admin: Object.assign({ password: adminPwd, azione }, extra || {}) }) });
   return res.json();
 }
@@ -2518,5 +2756,5 @@ syncSites();
 syncPlan();
 syncInterventi();
 setInterval(flush, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { db = load(); db.queue = db.queue || []; db.endpoint = db.endpoint || DEFAULT_ENDPOINT; render(); flush(); syncSites(); syncPlan(); syncInterventi(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !DEMO.on) { db = load(); db.queue = db.queue || []; db.endpoint = db.endpoint || DEFAULT_ENDPOINT; render(); flush(); syncSites(); syncPlan(); syncInterventi(); } });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
