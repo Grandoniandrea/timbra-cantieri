@@ -1,6 +1,9 @@
 # Timbra Cantieri – app Android e iPhone
 
 È la stessa app web della cartella principale, impacchettata con Capacitor.
+L'app carica la versione pubblicata su grandoniandrea.github.io/timbra-cantieri: ogni aggiornamento
+dell'app web arriva da solo sui telefoni, senza reinstallare. Reinstallare l'APK serve solo quando
+cambia la parte nativa (permessi, icona, plugin). Senza rete funziona con la copia salvata.
 
 ## Android (file APK di prova)
 Si crea da solo su GitHub a ogni modifica dell'app: GitHub Actions → workflow "App Android di prova".

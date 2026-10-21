@@ -2,5 +2,9 @@
   "appId": "it.grandoni.timbracantieri",
   "appName": "Timbra Cantieri",
   "webDir": "www",
+  "server": {
+    "url": "https://grandoniandrea.github.io/timbra-cantieri/",
+    "cleartext": false
+  },
   "android": { "allowMixedContent": false }
 }
