@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 46;
+const APP_VERSION = 47;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -1348,14 +1348,16 @@ function modSettings(week) {
     <h3>⚙️ Impostazioni modulo</h3>
     <label>Tipologia intervento<input name="tipo" maxlength="30" value="${esc(m.tipo || 'Ingombranti')}"></label>
     <label>Prima del cantiere (facoltativo)<input name="pref" maxlength="20" value="${esc(m.pref || '')}" placeholder="es. Geofor → Geofor Cascina"></label>
+    <label class="adm-on"><input type="checkbox" name="prove" ${m.prove !== false ? 'checked' : ''}> Includi le timbrature fatte in modalità prova</label>
     <div class="row"><button class="btn ghost" value="back" formnovalidate>Annulla</button><button class="btn" value="ok">Salva</button></div>`, (a, fd) => {
-    if (a === 'ok') { db.modulo = { tipo: String(fd.get('tipo') || '').trim(), pref: String(fd.get('pref') || '').trim() }; save(); }
+    if (a === 'ok') { db.modulo = { tipo: String(fd.get('tipo') || '').trim(), pref: String(fd.get('pref') || '').trim(), prove: fd.get('prove') === 'on' }; save(); }
     setTimeout(() => modShow(week), 50);
   });
 }
 function modBlocks(week) {
   const da = dayFromIso(week).getTime(), a = dayFromIso(addDays(week, 7)).getTime();
-  const shifts = db.shifts.filter(s => s.end && s.start >= da && s.start < a && !s.demo).sort((x, y) => x.start - y.start);
+  const conProve = (db.modulo || {}).prove !== false;
+  const shifts = db.shifts.filter(s => s.end && s.start >= da && s.start < a && (conProve || !s.demo)).sort((x, y) => x.start - y.start);
   const blocks = [];
   shifts.forEach(s => {
     const name = siteById(s.siteId).name;
@@ -1409,7 +1411,7 @@ function modDoc(week) {
     </div>
   </div>`;
   const tot = shifts.length * cfg().oreTurno * 3600000;
-  return { html: pagine.map(one).join('<div class="mod-cut"></div>'), turni: shifts.length, tot, moduli: pagine.length };
+  return { html: pagine.map(one).join('<div class="mod-cut"></div>'), turni: shifts.length, tot, moduli: pagine.length, prove: shifts.filter(s => s.demo).length };
 }
 // Crea il PDF del modulo sul telefono e lo condivide (WhatsApp, email…) al responsabile
 const loadScript = src => new Promise((ok, ko) => {
@@ -1472,7 +1474,7 @@ function modShow(week) {
   openDialog(`
     <h3>📝 Modulo ore</h3>
     <label class="mod-cal">📅 Settimana del<input type="date" id="modDate" value="${week}"></label>
-    <p class="note">${r.turni ? `${r.turni} turn${r.turni === 1 ? 'o' : 'i'} · ${hm(r.tot)} ore${r.moduli > 1 ? ` · ${r.moduli} moduli (più di 4 cantieri)` : ''}` : 'Nessuna timbratura in questa settimana.'}</p>
+    <p class="note">${r.turni ? `${r.turni} turn${r.turni === 1 ? 'o' : 'i'} · ${hm(r.tot)} ore${r.moduli > 1 ? ` · ${r.moduli} moduli (più di 4 cantieri)` : ''}${r.prove ? ` · di cui ${r.prove} in modalità prova` : ''}` : 'Nessuna timbratura in questa settimana.'}</p>
     <div class="mod-wrap"><div class="mod-scale">${r.html}</div></div>
     <div class="menu">
       <button class="btn" value="send" ${r.turni ? '' : 'disabled'}>📤 Invia a ${esc(cfg().autorizzaNome || 'responsabile')}</button>
