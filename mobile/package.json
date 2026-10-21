@@ -1,0 +1,20 @@
+{
+  "name": "timbra-cantieri-mobile",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Timbra Cantieri come app Android e iPhone (Capacitor): stessa app web, impacchettata.",
+  "scripts": {
+    "copy": "node copy-web.js",
+    "android": "node copy-web.js && npx cap sync android",
+    "ios": "node copy-web.js && npx cap sync ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "6.2.0",
+    "@capacitor/core": "6.2.0",
+    "@capacitor/ios": "6.2.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "6.2.0"
+  }
+}

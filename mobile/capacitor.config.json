@@ -1,0 +1,6 @@
+{
+  "appId": "it.grandoni.timbracantieri",
+  "appName": "Timbra Cantieri",
+  "webDir": "www",
+  "android": { "allowMixedContent": false }
+}
