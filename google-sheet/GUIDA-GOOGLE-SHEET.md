@@ -75,3 +75,8 @@ i cinque `case 'dpi…'` in `admin_` e la colonna "Ore settimanali" nella scheda
 Si installa come le altre parti: caricare il file completo, rimettere ID del foglio, nome e telefono
 del responsabile, salvare e pubblicare una **nuova versione** del deployment.
 Il codice di accesso e gli altri dati restano (sono nelle proprietà dello script).
+
+## Aggiornamento: timbrature di prova
+Le timbrature fatte in modalità prova (colonna "Controllo sede" = PROVA) restano nel foglio ma non
+fanno partire avvisi (immediati e serale) e non entrano in riepiloghi, extra da autorizzare e statistiche.
+Si installa insieme alle altre parti con il file completo `Codice.gs`.

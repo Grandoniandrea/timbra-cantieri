@@ -418,3 +418,4 @@ dialog input.dpi-q { width: 44px; min-height: 36px; padding: 4px 6px; text-align
   .d-ok { background: #24300c; color: #c5e27a; }
 }
 .pd-t.dpi-t thead th:first-child { background: #e7f2ea; border: 1px solid #000; }
+.prova-tag { display: block; font-size: 11px; color: var(--muted); font-weight: 600; text-align: right; }

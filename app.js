@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 45;
+const APP_VERSION = 46;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -161,7 +161,7 @@ function render() {
   const bar = $('#demoBar');
   if (isDemo()) {
     bar.hidden = false;
-    bar.innerHTML = `<span>🧪 <b>Modalità prova</b> fino alle ${fmtTime(db.demoUntil)}: puoi timbrare anche fuori sede (solo questo telefono).</span>
+    bar.innerHTML = `<span>🧪 <b>Modalità prova</b> fino alle ${fmtTime(db.demoUntil)}: timbri anche fuori sede, senza avvisi e senza contare le ore (solo questo telefono).</span>
       <button type="button" class="btn ghost" id="demoOff">Disattiva</button>`;
     $('#demoOff').onclick = () => setDemo(false);
   } else bar.hidden = true;
@@ -202,12 +202,12 @@ function render() {
   }
 
   // Statistiche (turni chiusi + turno in corso)
-  const all = db.shifts.slice();
+  const all = db.shifts.filter(s => !s.demo);
   if (db.active) all.push({ start: db.active.start, end: Date.now() });
   const sum = from => all.filter(s => s.start >= from).reduce((a, s) => a + (s.end - s.start), 0);
   $('#statWeek').textContent = fmtDur(sum(startOfWeek()));
   $('#statMonth').textContent = fmtDur(sum(startOfMonth()));
-  const n = db.shifts.filter(s => s.start >= startOfMonth()).length;
+  const n = db.shifts.filter(s => s.start >= startOfMonth() && !s.demo).length;
   $('#statMonthN').textContent = `${n} turn${n === 1 ? 'o' : 'i'} conclus${n === 1 ? 'o' : 'i'}`;
 
   renderInterventi();
@@ -239,7 +239,7 @@ function render() {
     return `<li ${isEmployee() ? '' : `data-edit-shift="${s.id}" style="cursor:pointer"`}>
       <span class="dot" style="background:${esc(site.color)}"></span>
       <div class="grow"><b>${esc(site.name)}</b><span>${fmtDate(s.start)} · ${(fascia(s.start) || { nome: 'Fuori orario' }).nome} · ${fmtTime(s.start)} → ${fmtTime(s.end)}</span></div>
-      <span class="log-dur">${fmtDur(s.end - s.start)}${extraMin(s) ? `<small class="extra-tag">+${fmtDur(extraMin(s) * 60000)} extra</small>` : ''}</span>
+      <span class="log-dur">${fmtDur(s.end - s.start)}${s.demo ? '<small class="prova-tag">🧪 prova · non conta</small>' : extraMin(s) ? `<small class="extra-tag">+${fmtDur(extraMin(s) * 60000)} extra</small>` : ''}</span>
     </li>`;
   }).join('') : '<li class="empty">Le tue timbrature compariranno qui.</li>';
 }
@@ -1355,7 +1355,7 @@ function modSettings(week) {
 }
 function modBlocks(week) {
   const da = dayFromIso(week).getTime(), a = dayFromIso(addDays(week, 7)).getTime();
-  const shifts = db.shifts.filter(s => s.end && s.start >= da && s.start < a).sort((x, y) => x.start - y.start);
+  const shifts = db.shifts.filter(s => s.end && s.start >= da && s.start < a && !s.demo).sort((x, y) => x.start - y.start);
   const blocks = [];
   shifts.forEach(s => {
     const name = siteById(s.siteId).name;
@@ -1575,7 +1575,7 @@ function payCalc(m) {
   const p = paga();
   const [y, mo] = m.split('-').map(Number);
   const da = new Date(y, mo - 1, 1).getTime(), a = new Date(y, mo, 1).getTime();
-  const mine = db.shifts.filter(s => s.start >= da && s.start < a && s.end);
+  const mine = db.shifts.filter(s => s.start >= da && s.start < a && s.end && !s.demo);
   const r2 = v => Math.round(v * 100) / 100;
   // Quota del mese: intera a fine mese, oppure i giorni passati fino a oggi
   const giorniMese = new Date(y, mo, 0).getDate();
@@ -2240,7 +2240,7 @@ function adminStatsPick() {
 function statsFor(filter) {
   const ore = cfg().oreTurno;
   const by = {};
-  statsShifts.filter(t => (!filter || t.dip === filter) && t.end).forEach(t => {
+  statsShifts.filter(t => (!filter || t.dip === filter) && t.end && !/^PROVA/.test(t.sede || '')).forEach(t => {
     const k = t.cantiere || '—';
     const x = by[k] || (by[k] = { nome: k, turni: 0, ore: 0, extra: 0, operatori: new Set() });
     x.turni++;

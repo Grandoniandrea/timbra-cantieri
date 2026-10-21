@@ -448,11 +448,14 @@ function controlloSede_(s, prima) {
   return problemi.length ? 'FUORI SEDE: ' + problemi.join('; ') : 'OK';
 }
 
+// Timbrature fatte in modalità prova: restano nel foglio ma non contano e non fanno partire avvisi
+const diProva_ = r => String(r[COL_SEDE - 1] || '').indexOf('PROVA') === 0;
+
 function extraInAttesa_() {
   const sh = foglio_();
   if (sh.getLastRow() < 2) return [];
   return sh.getRange(2, 1, sh.getLastRow() - 1, INTESTAZIONE.length).getValues()
-    .filter(r => r[COL_STATO_EXTRA - 1] === EXTRA_ATTESA)
+    .filter(r => r[COL_STATO_EXTRA - 1] === EXTRA_ATTESA && !diProva_(r))
     .map(r => ({ id: String(r[0]), dip: String(r[1]), cantiere: String(r[3]),
       start: r[4] instanceof Date ? r[4].getTime() : null, end: r[5] instanceof Date ? r[5].getTime() : null,
       extra: Number(r[COL_EXTRA - 1]) || 0, motivo: String(r[COL_MOTIVO - 1]), nota: String(r[COL_NOTA - 1]) }))
@@ -509,7 +512,7 @@ function creaRiepilogo_(anno, mese) {
   const cantieri = new Set();
   dati.forEach(r => {
     const dip = r[1], giorno = r[2], cantiere = r[3], stato = r[7];
-    if (!(giorno instanceof Date) || giorno < da || giorno >= a) return;
+    if (!(giorno instanceof Date) || giorno < da || giorno >= a || diProva_(r)) return;
     const p = perDip[dip] || (perDip[dip] = { turni: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0, mattine: 0, pomeriggi: 0 });
     if (stato !== 'Chiuso') { p.aperti++; return; }
     p.turni++;
@@ -579,7 +582,7 @@ function creaComuni_(anno, mese) {
   const per = {};
   dati.forEach(r => {
     const dip = r[1], giorno = r[2], cantiere = r[3], stato = r[7];
-    if (!(giorno instanceof Date) || giorno < da || giorno >= a || stato !== 'Chiuso') return;
+    if (!(giorno instanceof Date) || giorno < da || giorno >= a || stato !== 'Chiuso' || diProva_(r)) return;
     const c = per[cantiere] || (per[cantiere] = { servizi: 0, giorni: new Set(), extra: 0, operatori: new Set() });
     c.servizi++;
     c.giorni.add(giorno.getTime());
@@ -687,7 +690,7 @@ function avvisoSerale() {
   const sh = foglio_();
   const oggi = new Date(); oggi.setHours(0, 0, 0, 0);
   const dati = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, INTESTAZIONE.length).getValues() : [];
-  const aperti = dati.filter(r => r[7] === 'In corso' && r[4] instanceof Date);
+  const aperti = dati.filter(r => r[7] === 'In corso' && r[4] instanceof Date && !diProva_(r));
   const extra = extraInAttesa_();
   const ass = assenze_().filter(a => a.stato === ASS_ATTESA);
   const fuori = dati.filter(r => String(r[COL_SEDE - 1] || '').indexOf('FUORI SEDE') === 0 && r[4] instanceof Date && r[4] >= oggi);
@@ -810,9 +813,7 @@ function avvisiImmediati(soloSegna) {
     if (sede.indexOf('FUORI SEDE') === 0) {
       aggiungi(id + '|f', 'Timbratura fuori sede', dip, cant + ' · entrata ' + f(ent) + ' · ' + sede);
     }
-    if (sede.indexOf('PROVA') === 0) {
-      aggiungi(id + '|p', 'Timbratura in modalità prova', dip, cant + ' · entrata ' + f(ent));
-    }
+    if (sede.indexOf('PROVA') === 0) return; // prove del responsabile: nessun avviso
     if (r[7] === 'In corso' && ora - ent.getTime() > ORE_USCITA_DIMENTICATA * 36e5) {
       aggiungi(id + '|u', 'Uscita non timbrata', dip, cant + ' · entrata ' + f(ent) + ' · nessuna uscita dopo ' + ORE_USCITA_DIMENTICATA + ' ore');
     }
