@@ -420,3 +420,9 @@ dialog input.dpi-q { width: 44px; min-height: 36px; padding: 4px 6px; text-align
 .pd-t.dpi-t thead th:first-child { background: #e7f2ea; border: 1px solid #000; }
 .prova-tag { display: block; font-size: 11px; color: var(--muted); font-weight: 600; text-align: right; }
 .dpi-pen { font-weight: 400; opacity: .6; margin-left: 4px; }
+.dpi-it { display: flex !important; align-items: center; gap: 10px; }
+.dpi-txt { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.dpi-txt > span { font-size: 12px; }
+.dpi-gear { flex: none; width: 40px; height: 40px; display: grid; place-items: center; font-size: 26px; border-radius: 10px; background: rgba(255,255,255,.55); }
+@media (prefers-color-scheme: dark) { .dpi-gear { background: rgba(0,0,0,.25); } }
+.dpi-oprow { display: flex !important; align-items: center; gap: 10px; }

@@ -27,7 +27,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 48;
+const APP_VERSION = 49;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -857,8 +857,8 @@ function dpiPickOp() {
     <div class="adm-list">${dpiPeople().map(p => {
       const att = Object.values(dpiAttuali(p));
       const o = att.filter(c => dpiStato(c) === 'over').length, u = att.filter(c => dpiStato(c) === 'under').length;
-      return `<button type="button" class="shift-row" data-dop="${esc(p)}"><b>${esc(p)}</b><br>
-        <span>${att.length ? `${att.length} capi consegnati` : 'Nessuna consegna'}${o ? ` · <b class="dpi-red">${o} scadut${o === 1 ? 'o' : 'i'}</b>` : ''}${u ? ` · ${u} in scadenza` : ''}</span></button>`;
+      return `<button type="button" class="shift-row dpi-oprow" data-dop="${esc(p)}"><span class="dpi-txt"><b>${esc(p)}</b>
+        <span>${att.length ? `${att.length} capi consegnati` : 'Nessuna consegna'}${o ? ` · <b class="dpi-red">${o} scadut${o === 1 ? 'o' : 'i'}</b>` : ''}${u ? ` · ${u} in scadenza` : ''}</span></span><span class="dpi-gear" aria-hidden="true">⚙️</span></button>`;
     }).join('') || '<p class="note">Nessun operatore.</p>'}</div>
     <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(dpiHome, 50));
   document.querySelectorAll('[data-dop]').forEach(b => { b.onclick = () => dpiOp(b.dataset.dop); });
@@ -877,8 +877,8 @@ function dpiOp(nome) {
     </div>
     <div class="dpi-list">${capi.map(c => {
       const x = att[c.nome];
-      return `<div class="dpi-it ${x ? 'd-' + dpiStato(x) : 'd-none'}" ${x ? `data-dedit="${esc(x.id)}"` : ''}><b>${esc(c.nome)}${x ? ' <span class="dpi-pen">✎</span>' : ''}${x && x.taglia ? ` <small>${esc(x.taglia)}</small>` : ''}</b>
-        <span>${x ? `consegnato il ${dmyIt(x.data)}${x.qta > 1 ? ` (×${x.qta})` : ''} · ${stTxt(x)}` : 'mai consegnato'}</span></div>`;
+      return `<div class="dpi-it ${x ? 'd-' + dpiStato(x) : 'd-none'}" ${x ? `data-dedit="${esc(x.id)}"` : ''}><div class="dpi-txt"><b>${esc(c.nome)}${x && x.taglia ? ` <small>${esc(x.taglia)}</small>` : ''}</b>
+        <span>${x ? `consegnato il ${dmyIt(x.data)}${x.qta > 1 ? ` (×${x.qta})` : ''} · ${stTxt(x)}` : 'mai consegnato'}</span></div>${x ? '<span class="dpi-gear" aria-label="Modifica">⚙️</span>' : ''}</div>`;
     }).join('')}</div>
     <div class="menu">
       <button class="btn" value="new">➕ Nuova consegna a ${esc(nome)}</button>
@@ -908,8 +908,8 @@ function dpiStorico(nome) {
   openDialog(`
     <h3>📜 Consegne a ${esc(nome)}</h3>
     <p class="note">Tocca una consegna per modificarla o eliminarla.</p>
-    <div class="dpi-list">${cons.map(c => `<div class="dpi-it d-${dpiStato(c)}" data-dedit="${esc(c.id)}"><b>${esc(c.capo)}${c.taglia ? ` <small>${esc(c.taglia)}</small>` : ''} <span class="dpi-pen">✎</span></b>
-      <span>${dmyIt(c.data)}${c.qta > 1 ? ` · ×${c.qta}` : ''}${c.scadenza ? ` · scade ${dmyIt(c.scadenza)}` : ''}${c.note ? ` · ${esc(c.note)}` : ''}</span></div>`).join('') || '<p class="note">Nessuna consegna.</p>'}</div>
+    <div class="dpi-list">${cons.map(c => `<div class="dpi-it d-${dpiStato(c)}" data-dedit="${esc(c.id)}"><div class="dpi-txt"><b>${esc(c.capo)}${c.taglia ? ` <small>${esc(c.taglia)}</small>` : ''}</b>
+      <span>${dmyIt(c.data)}${c.qta > 1 ? ` · ×${c.qta}` : ''}${c.scadenza ? ` · scade ${dmyIt(c.scadenza)}` : ''}${c.note ? ` · ${esc(c.note)}` : ''}</span></div><span class="dpi-gear" aria-label="Modifica">⚙️</span></div>`).join('') || '<p class="note">Nessuna consegna.</p>'}</div>
     <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(() => dpiOp(nome), 50));
   document.querySelectorAll('#dlgBody [data-dedit]').forEach(el => {
     el.style.cursor = 'pointer';
