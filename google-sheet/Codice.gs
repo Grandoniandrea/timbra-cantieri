@@ -108,7 +108,7 @@ function doGet(e) {
     return json_({ ok: true, assenze: assenze_().filter(a => a.device && a.device === String(e.parameter.device || '')) });
   }
   if (e && e.parameter && e.parameter.azione === 'cantieri') {
-    return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), fisso: fissoDi_(e.parameter.nome), config: {
+    return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), committenti: committenti_(), fisso: fissoDi_(e.parameter.nome), config: {
       oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN, turni: TURNI, sede: sede_(),
       autorizzaNome: AUTORIZZA_NOME.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_NOME,
       autorizzaTelefono: AUTORIZZA_TELEFONO.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_TELEFONO,
@@ -1215,4 +1215,21 @@ function eliminaDpi_(id) {
   const sh = dpiConsSh_();
   const r = trovaRiga_(sh, id);
   if (r) sh.deleteRow(r);
+}
+
+// ---------- Committenti dei cantieri ----------
+// Scheda Cantieri, colonna E "Committente": GEOFOR, ECOFOR SERVICE o ECOACCIAI (vuoto = GEOFOR).
+function committenti_() {
+  const sh = foglioCantieri_();
+  if (sh.getRange(1, 5).getValue() !== 'Committente') {
+    sh.getRange(1, 5).setValue('Committente').setFontWeight('bold').setBackground('#e7f2ea');
+  }
+  const out = {};
+  if (sh.getLastRow() < 2) return out;
+  sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues().forEach(r => {
+    const nome = String(r[0] || '').trim().toUpperCase();
+    const c = String(r[4] || '').trim().toUpperCase();
+    if (nome && c) out[nome] = c;
+  });
+  return out;
 }

@@ -454,3 +454,14 @@ body.demo-on dialog[open] { position: fixed; inset: 10px 0 auto; z-index: 50; ma
 .fisso-in select { min-height: 38px; padding: 6px 10px; }
 .list .more-sites { justify-content: center; padding: 10px 14px; }
 .list .more-sites .btn { width: 100%; }
+
+/* Committenti: loghi in alto, i cantieri del committente scelto sotto */
+.clients { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.client { display: grid; gap: 6px; padding: 8px; border-radius: 14px; border: 2px solid var(--line); background: var(--card);
+  cursor: pointer; font: inherit; color: var(--ink); text-align: center; }
+.client.on { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.client-logo { display: grid; place-items: center; height: 64px; background: #fff; border-radius: 10px; padding: 6px; }
+.client-logo img { max-height: 52px; max-width: 100%; object-fit: contain; }
+.client-n { font-size: 12px; font-weight: 700; color: var(--muted); }
+.client.on .client-n { color: var(--brand); }
+.client:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }

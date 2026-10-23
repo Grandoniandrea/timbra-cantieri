@@ -85,3 +85,8 @@ Si installa insieme alle altre parti con il file completo `Codice.gs`.
 Scheda Operatori, colonna D "Cantiere fisso": l'app dell'operatore mostra subito quel cantiere
 e con la card timbra direttamente lì. Si imposta dall'app (Programma → Operatori).
 Si installa con il file completo `Codice.gs` e una nuova versione del deployment.
+
+## Aggiornamento: committenti dei cantieri
+Scheda Cantieri, colonna E "Committente": GEOFOR, ECOFOR SERVICE o ECOACCIAI (vuoto = GEOFOR).
+Nell'app i cantieri sono raggruppati sotto i loghi dei committenti. Senza questa colonna l'app li
+riconosce dal nome (chi contiene ECOFOR o ECOACCIAI, il resto Geofor).
