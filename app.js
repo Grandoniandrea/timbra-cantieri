@@ -1501,7 +1501,8 @@ function oreSettimana(squadre) {
   squadre.forEach(s => s.operatori.forEach(o => {
     const k = o.trim().toLowerCase();
     const x = m[k] || (m[k] = { nome: o, lavoro: 0, ferie: 0 });
-    if (isAss(s.turno)) x.ferie += cfg().oreTurno; else x.lavoro += oreTurnoDi(s.cantiere);
+    if (isAss(s.turno)) { x.ferie += cfg().oreTurno; x.gg = x.gg || {}; x.gg[s.turno] = (x.gg[s.turno] || 0) + 1; }
+    else x.lavoro += oreTurnoDi(s.cantiere);
   }));
   return m;
 }
@@ -1718,7 +1719,7 @@ function planHoursBox() {
     </summary>
     <div class="oh-list">${rows.map(r => `<div class="oh-row oh-${r.st}">
       <div class="oh-line">
-        <span class="oh-nome">${esc(r.nome)}${r.x.ferie ? `<em>${fmtH(r.x.ferie)} h ferie/perm.</em>` : ''}</span>
+        <span class="oh-nome ${r.x.gg && r.x.gg.Malattia ? 'oh-mal' : r.x.gg && r.x.gg.Ferie ? 'oh-fer' : ''}">${esc(r.nome)}${ASSENZE.filter(a => r.x.gg && r.x.gg[a.nome]).map(a => `<i class="oh-ass oh-ass-${a.nome.toLowerCase()}">${a.nome} ${r.x.gg[a.nome]} g</i>`).join('')}</span>
         <span class="oh-ore"><b>${fmtH(r.tot)}</b><span>/${fmtH(r.max)} h</span></span>
       </div>
       <div class="oh-barline">
