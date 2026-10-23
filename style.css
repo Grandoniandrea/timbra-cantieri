@@ -534,3 +534,55 @@ dialog .btn:has(> .ico) { display: flex; justify-content: flex-start; text-align
 .oh-title { grid-area: t; }
 .oh-caret { grid-area: c; }
 .oh-chips { grid-area: k; margin-left: 0; justify-content: flex-start; }
+/* ===== Stile "sobrio da gestionale" (home, DPI, visite) ===== */
+:root { --st-over: #c62828; --st-under: #d97706; --st-ok: #2e8b57; --shadow: 0 1px 2px rgba(16,24,20,.04), 0 6px 20px rgba(16,24,20,.05); }
+@media (prefers-color-scheme: dark) { :root { --st-over: #f87171; --st-under: #fbbf24; --st-ok: #4ade80; --shadow: none; } }
+
+/* Card e sezioni */
+.card, .list { box-shadow: var(--shadow); }
+.sec-head small, .stat small, .status small { letter-spacing: .1em; font-size: 11px; }
+.who::after { content: ""; }
+.icon-btn#btnMenu { box-shadow: var(--shadow); }
+
+/* Stato turno: barra laterale verde quando è attivo */
+.status { position: relative; overflow: hidden; }
+.status.active { background: var(--card); border-color: var(--line); }
+.status.active::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--brand); }
+
+/* Contatori settimana / mese */
+.stat strong { font-size: 26px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; }
+
+/* Committenti */
+.clients { gap: 10px; }
+.client { border: 1px solid var(--line); border-radius: 14px; padding: 10px; box-shadow: var(--shadow); position: relative; }
+.client.on { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand), var(--shadow); }
+.client.on::after { content: ''; position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--brand); }
+.client-logo { height: 58px; border-radius: 10px; }
+.client-n { font-size: 12px; font-weight: 600; }
+
+/* Elenco cantieri: pallino colore invece della barra, Entrata a pillola */
+.list li { padding: 12px 14px; }
+.dot { width: 10px; height: 10px; align-self: center; border-radius: 50%; }
+.list li .grow b { font-weight: 650; }
+.list li .grow span { font-size: 12px; color: var(--muted); }
+.list li .btn { border-radius: 999px; padding: 8px 16px; min-height: 38px; font-size: 14px; }
+
+/* DPI e visite: righe neutre con barretta e testo colorati per stato */
+.dpi-list { gap: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--card); }
+.dpi-it { --c: var(--muted); position: relative; border-radius: 0; padding: 11px 12px 11px 16px; background: var(--card) !important; color: var(--ink) !important; border: 0 !important; }
+.dpi-it + .dpi-it { border-top: 1px solid var(--line) !important; }
+.dpi-it::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: var(--c); }
+.dpi-it.d-over { --c: var(--st-over); }
+.dpi-it.d-under { --c: var(--st-under); }
+.dpi-it.d-ok { --c: var(--st-ok); }
+.dpi-it.d-na, .dpi-it.d-none { --c: var(--line); }
+.dpi-it .dpi-txt b { font-weight: 650; }
+.dpi-it .dpi-txt > span { color: var(--muted); }
+.dpi-it.d-over .dpi-txt > span, .dpi-it.d-under .dpi-txt > span { color: var(--c); font-weight: 600; }
+.dpi-it.d-none .dpi-txt b, .dpi-it.d-na .dpi-txt b { color: var(--muted); font-weight: 600; }
+.dpi-gear { width: 36px; height: 36px; border-radius: 10px; background: transparent !important; border: 1px solid var(--line); color: var(--muted); }
+.dpi-gear .ico-solo { width: 20px !important; height: 20px !important; color: var(--muted) !important; }
+.sc-cat { gap: 8px; margin-top: 4px; }
+.sc-cat small { font-size: 11px; letter-spacing: .1em; }
+.dpi-red { color: var(--st-over) !important; }
