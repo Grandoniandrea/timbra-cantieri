@@ -108,7 +108,7 @@ function doGet(e) {
     return json_({ ok: true, assenze: assenze_().filter(a => a.device && a.device === String(e.parameter.device || '')) });
   }
   if (e && e.parameter && e.parameter.azione === 'cantieri') {
-    return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), config: {
+    return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), fisso: fissoDi_(e.parameter.nome), config: {
       oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN, turni: TURNI, sede: sede_(),
       autorizzaNome: AUTORIZZA_NOME.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_NOME,
       autorizzaTelefono: AUTORIZZA_TELEFONO.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_TELEFONO,
@@ -876,7 +876,7 @@ function foglioOperatori_() {
   let sh = ss.getSheetByName(FOGLIO_OPERATORI);
   if (!sh) {
     sh = ss.insertSheet(FOGLIO_OPERATORI);
-    sh.getRange(1, 1, 1, 3).setValues([['Operatore', 'Attivo', 'Ore settimanali']]).setFontWeight('bold').setBackground('#e7f2ea');
+    sh.getRange(1, 1, 1, 4).setValues([['Operatore', 'Attivo', 'Ore settimanali', 'Cantiere fisso']]).setFontWeight('bold').setBackground('#e7f2ea');
     sh.setFrozenRows(1);
     sh.setColumnWidth(1, 240);
     const nomi = nomiDaTimbrature_();
@@ -884,6 +884,9 @@ function foglioOperatori_() {
   }
   if (sh.getRange(1, 3).getValue() !== 'Ore settimanali') {
     sh.getRange(1, 3).setValue('Ore settimanali').setFontWeight('bold').setBackground('#e7f2ea');
+  }
+  if (sh.getRange(1, 4).getValue() !== 'Cantiere fisso') {
+    sh.getRange(1, 4).setValue('Cantiere fisso').setFontWeight('bold').setBackground('#e7f2ea');
   }
   return sh;
 }
@@ -902,12 +905,13 @@ function nomiDaTimbrature_() {
 /** Operatori da scegliere: quelli della scheda "Operatori" più chi ha già timbrato. */
 function operatori_() {
   const sh = foglioOperatori_();
-  const elenco = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues()
+  const elenco = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 4).getValues()
     .filter(r => String(r[0]).trim())
-    .map(r => ({ nome: String(r[0]).trim(), attivo: String(r[1]).trim().toUpperCase() !== 'NO', ore: Number(r[2]) || 30 })) : [];
+    .map(r => ({ nome: String(r[0]).trim(), attivo: String(r[1]).trim().toUpperCase() !== 'NO', ore: Number(r[2]) || 30,
+      fisso: String(r[3] || '').trim().toUpperCase() })) : [];
   const noti = {};
   elenco.forEach(o => { noti[o.nome.toLowerCase()] = true; });
-  nomiDaTimbrature_().forEach(n => { if (!noti[n.toLowerCase()]) elenco.push({ nome: n, attivo: true, ore: 30 }); });
+  nomiDaTimbrature_().forEach(n => { if (!noti[n.toLowerCase()]) elenco.push({ nome: n, attivo: true, ore: 30, fisso: '' }); });
   return elenco.sort((a, b) => a.nome.localeCompare(b.nome));
 }
 
@@ -919,11 +923,24 @@ function salvaOperatori_(lista) {
     const nome = String(o && o.nome || '').trim().replace(/\s+/g, ' ').slice(0, 60);
     if (!nome || visti[nome.toLowerCase()]) return;
     visti[nome.toLowerCase()] = true;
-    righe.push([nome, o.attivo === false ? 'NO' : 'SI', Math.max(1, Math.min(60, Number(o.ore) || 30))]);
+    righe.push([nome, o.attivo === false ? 'NO' : 'SI', Math.max(1, Math.min(60, Number(o.ore) || 30)),
+      String(o.fisso || '').trim().toUpperCase().slice(0, 60)]);
   });
   const sh = foglioOperatori_();
-  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 3).clearContent();
-  if (righe.length) sh.getRange(2, 1, righe.length, 3).setValues(righe);
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 4).clearContent();
+  if (righe.length) sh.getRange(2, 1, righe.length, 4).setValues(righe);
+}
+
+/** Cantiere fisso dell'operatore (impianto dove lavora sempre), cercato per nome e cognome o solo cognome. */
+function fissoDi_(nome) {
+  const n = String(nome || '').trim().toLowerCase();
+  if (!n) return '';
+  const cognome = n.split(/\s+/).slice(-1)[0];
+  const o = operatori_().find(x => {
+    const k = x.nome.toLowerCase();
+    return k === n || k === cognome || k.split(/\s+/).reverse().join(' ') === n;
+  });
+  return o ? o.fisso : '';
 }
 
 function dataIso_(d) { return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd'); }

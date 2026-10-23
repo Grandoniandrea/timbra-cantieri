@@ -29,7 +29,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 50;
+const APP_VERSION = 51;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -225,17 +225,22 @@ function render() {
   $('#foot').textContent = (managed
     ? 'Le timbrature vengono inviate al registro aziendale.'
     : 'I dati restano su questo telefono. Fai un backup ogni tanto dal menu ⋯') + ` · versione ${APP_VERSION}`;
-  const shown = db.sites.filter(s => !s.hidden);
+  const fissoSite = db.fisso ? db.sites.find(s => !s.hidden && s.name === db.fisso) : null;
+  const tutti = db.sites.filter(s => !s.hidden);
+  const shown = fissoSite ? (db.showAllSites ? [fissoSite].concat(tutti.filter(s => s !== fissoSite)) : [fissoSite]) : tutti;
   const todayPlanned = new Set(myPlan().filter(p => p.data === isoDay(new Date())).map(p => p.cantiere));
   $('#sites').innerHTML = shown.length ? shown.map(s => {
     const here = db.active && db.active.siteId === s.id;
     return `<li>
       <span class="dot" style="background:${esc(s.color)}"></span>
-      <div class="grow"><b>${esc(s.name)}</b><span>${here ? 'In corso' : todayPlanned.has(s.name) ? '📅 In programma oggi' : 'Pronto'}</span></div>
+      <div class="grow"><b>${esc(s.name)}</b><span>${here ? 'In corso' : s === fissoSite ? '🏭 Il tuo impianto' : todayPlanned.has(s.name) ? '📅 In programma oggi' : 'Pronto'}</span></div>
       ${managed ? '' : `<button class="icon-btn" data-edit-site="${s.id}" aria-label="Modifica ${esc(s.name)}">✎</button>`}
       <button class="btn" data-in="${s.id}" ${db.active ? 'disabled' : ''}>Entrata</button>
     </li>`;
-  }).join('') : '<li class="empty">Nessun cantiere. Aggiungine uno con + Nuovo.</li>';
+  }).join('') + (fissoSite && tutti.length > 1 ? `<li class="more-sites"><button type="button" class="btn ghost" id="btnAllSites">${db.showAllSites ? 'Mostra solo il mio impianto' : `Altri cantieri (${tutti.length - 1})`}</button></li>` : '')
+    : '<li class="empty">Nessun cantiere. Aggiungine uno con + Nuovo.</li>';
+  const allBtn = $('#btnAllSites');
+  if (allBtn) allBtn.onclick = () => { db.showAllSites = !db.showAllSites; save(); };
 
   // Registro
   const recent = db.shifts.slice(0, 30);
@@ -345,7 +350,13 @@ function editShift(id) {
   });
 }
 
-function pickSiteForNfc(pos) {
+function pickSiteForNfc(pos, scegli) {
+  const fissoSite = db.fisso ? db.sites.find(s => !s.hidden && s.name === db.fisso) : null;
+  if (fissoSite && !scegli) {
+    clockIn(fissoSite.id, pos);
+    const undo = () => { if (db.active) enqueueDelete(db.active.id); db.active = null; save(); };
+    return setTimeout(() => showBigOk('Entrata', fissoSite.name, `alle ${fmtTime(db.active.start)}`, undo), 50);
+  }
   openDialog(`
     <h3>Dove sei oggi?</h3>
     <p>Scegli il cantiere per timbrare l'entrata.</p>
@@ -1597,13 +1608,15 @@ function planPeopleEdit() {
   openDialog(`
     <h3>👥 Operatori</h3>
     <p class="note">Chi è spuntato compare nel programma. Chi ha già timbrato c'è già.</p>
-    <div class="plan-people">${planPeople.map((p, i) => `<div class="pp pp-ore"><label><input type="checkbox" name="on" value="${i}" ${p.attivo !== false ? 'checked' : ''}><span>${esc(p.nome)}</span></label>
-      <label class="ore-in"><input name="ore${i}" inputmode="numeric" value="${oreContratto(p.nome)}" aria-label="Ore settimanali di ${esc(p.nome)}"> h/sett.</label></div>`).join('')}</div>
+    <div class="plan-people">${planPeople.map((p, i) => `<div class="pp pp-op"><div class="pp-ore"><label><input type="checkbox" name="on" value="${i}" ${p.attivo !== false ? 'checked' : ''}><span>${esc(p.nome)}</span></label>
+      <label class="ore-in"><input name="ore${i}" inputmode="numeric" value="${oreContratto(p.nome)}" aria-label="Ore settimanali di ${esc(p.nome)}"> h/sett.</label></div>
+      <label class="fisso-in">🏭 Cantiere fisso<select name="fisso${i}" aria-label="Cantiere fisso di ${esc(p.nome)}"><option value="">— nessuno (va dove serve)</option>${planSites.map(c => c.nome).concat(p.fisso && !planSites.some(c => c.nome === p.fisso) ? [p.fisso] : []).map(n => `<option ${n === p.fisso ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label></div>`).join('')}</div>
+    <p class="note">Chi ha un cantiere fisso, aprendo l'app trova subito quello (gli altri restano in "Altri cantieri") e passando la card timbra direttamente lì.</p>
     <label>Aggiungi operatori (uno per riga o separati da virgola)<textarea name="nuovo" rows="3" placeholder="es. Rossi&#10;Bianchi&#10;Mario Verdi"></textarea></label>
     <div class="row"><button class="btn ghost" value="cancel" formnovalidate>Indietro</button><button class="btn" value="ok">Salva</button></div>`, (a, fd) => {
     if (a === 'cancel') return setTimeout(planView, 50);
     const on = new Set(fd.getAll('on').map(Number));
-    const lista = planPeople.map((p, i) => ({ nome: p.nome, attivo: on.has(i), ore: Number(String(fd.get('ore' + i) || '').replace(',', '.')) || ORE_DEFAULT }));
+    const lista = planPeople.map((p, i) => ({ nome: p.nome, attivo: on.has(i), ore: Number(String(fd.get('ore' + i) || '').replace(',', '.')) || ORE_DEFAULT, fisso: String(fd.get('fisso' + i) || '') }));
     db.oreOp = Object.assign({}, db.oreOp);
     lista.forEach(p => { db.oreOp[p.nome.trim().toLowerCase()] = p.ore; });
     save();
@@ -1611,10 +1624,11 @@ function planPeopleEdit() {
     String(fd.get('nuovo') || '').split(/[\n,;]+/).map(v => cap(String(v).toLowerCase())).filter(Boolean).forEach(nuovo => {
       // Un cognome già presente come "Nome Cognome" non si duplica
       const giaC = lista.some(p => sameName(p.nome, nuovo) || sameName(p.nome.split(' ').slice(-1)[0], nuovo));
-      if (!giaC) lista.push({ nome: nuovo, attivo: true, ore: ORE_DEFAULT });
+      if (!giaC) lista.push({ nome: nuovo, attivo: true, ore: ORE_DEFAULT, fisso: '' });
     });
     setTimeout(() => call('operatori', { operatori: lista }, 'Salvo gli operatori', out => {
-      planPeople = (out.operatori || lista).map(p => Object.assign({}, p, { ore: Number(p.ore) > 0 ? Number(p.ore) : (lista.find(l => sameName(l.nome, p.nome)) || {}).ore }));
+      planPeople = (out.operatori || lista).map(p => { const l = lista.find(x => sameName(x.nome, p.nome)) || {};
+        return Object.assign({}, p, { ore: Number(p.ore) > 0 ? Number(p.ore) : l.ore, fisso: 'fisso' in p ? p.fisso : l.fisso || '' }); });
       toast('Operatori salvati ✓'); planView();
     }), 50);
   });
@@ -2027,9 +2041,11 @@ async function flush() {
 async function syncSites() {
   if (!db.endpoint || navigator.onLine === false) return;
   try {
-    const res = await fetch(ep('azione=cantieri'));
+    const res = await fetch(ep(`azione=cantieri&nome=${encodeURIComponent(fullName())}`));
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.cantieri)) return;
+    // Impianto fisso (es. operatori che lavorano sempre nello stesso stabilimento)
+    if ('fisso' in out && (out.fisso || '') !== (db.fisso || '')) { db.fisso = out.fisso || ''; save(); }
     if (out.config && JSON.stringify(out.config) !== JSON.stringify(db.config)) { db.config = out.config; save(); }
     applyReset();
     const names = out.cantieri;

@@ -80,3 +80,8 @@ Il codice di accesso e gli altri dati restano (sono nelle proprietà dello scrip
 Le timbrature fatte in modalità prova (colonna "Controllo sede" = PROVA) restano nel foglio ma non
 fanno partire avvisi (immediati e serale) e non entrano in riepiloghi, extra da autorizzare e statistiche.
 Si installa insieme alle altre parti con il file completo `Codice.gs`.
+
+## Aggiornamento: cantiere fisso degli operatori
+Scheda Operatori, colonna D "Cantiere fisso": l'app dell'operatore mostra subito quel cantiere
+e con la card timbra direttamente lì. Si imposta dall'app (Programma → Operatori).
+Si installa con il file completo `Codice.gs` e una nuova versione del deployment.

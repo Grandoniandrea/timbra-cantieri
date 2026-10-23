@@ -445,3 +445,12 @@ dialog input.dpi-q { width: 44px; min-height: 36px; padding: 4px 6px; text-align
 #demoTour .dt-x { width: 40px; padding: 0; }
 body.demo-on dialog[open] { position: fixed; inset: 10px 0 auto; z-index: 50; margin: 0 auto; max-height: calc(100dvh - 220px); overflow: auto; box-shadow: 0 0 0 100vmax rgba(0,0,0,.45); }
 .demo-btn { border-color: #95c11f !important; }
+
+/* Cantiere fisso */
+.pp-op { display: grid !important; gap: 8px; }
+.pp-op .pp-ore { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pp-op .pp-ore > label:first-child { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; font-weight: 600; }
+.fisso-in { display: grid !important; gap: 4px; font-size: 12px; font-weight: 600 !important; color: var(--muted); }
+.fisso-in select { min-height: 38px; padding: 6px 10px; }
+.list .more-sites { justify-content: center; padding: 10px 14px; }
+.list .more-sites .btn { width: 100%; }
