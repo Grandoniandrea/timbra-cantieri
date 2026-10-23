@@ -43,7 +43,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 54;
+const APP_VERSION = 55;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -1192,10 +1192,10 @@ function demoServer(azione, x) {
         const oggi = isoDay(new Date()), f = (op, voce, giorni, mesi) => { const d = dayFromIso(addDays(oggi, -giorni)); const sc = new Date(d); sc.setMonth(sc.getMonth() + mesi);
           return { id: 'sc' + op + voce, operatore: op, voce, cat: '', fatto: isoDay(d), scadenza: isoDay(sc), note: '' }; };
         s.sc = { voci: [v('Visita medica periodica', 'Sorveglianza sanitaria', 12), v('Prelievo / esami del sangue', 'Sorveglianza sanitaria', 12),
-          v('Formazione lavoratori (generale + specifica rischio alto)', 'Formazione', 60), v('Primo soccorso', 'Formazione', 36), v('Antincendio', 'Formazione', 60),
+          v('Corso sicurezza lavoratori (generale + specifica, rischio alto)', 'Formazione', 60), v('Primo soccorso', 'Formazione', 36), v('Antincendio', 'Formazione', 60),
           v('Preposto', 'Formazione', 24), v('Gru su autocarro (ragno)', 'Abilitazioni', 60), v('Patente C', 'Patenti e CQC', 60), v('CQC merci', 'Patenti e CQC', 60)],
           righe: [f('Mario Rossi', 'Visita medica periodica', 340, 12), f('Mario Rossi', 'Prelievo / esami del sangue', 340, 12), f('Mario Rossi', 'Primo soccorso', 1080, 36),
-            f('Mario Rossi', 'Formazione lavoratori (generale + specifica rischio alto)', 400, 60), f('Bianchi', 'Visita medica periodica', 380, 12),
+            f('Mario Rossi', 'Corso sicurezza lavoratori (generale + specifica, rischio alto)', 400, 60), f('Bianchi', 'Visita medica periodica', 380, 12),
             f('Bianchi', 'Preposto', 600, 24), f('Verdi', 'Gru su autocarro (ragno)', 200, 60), f('Neri', 'Visita medica periodica', 100, 12)] };
       }
       if (azione === 'scadreg') { const r = x.reg; s.sc.righe = s.sc.righe.filter(y => y.id !== r.id).concat([Object.assign({ cat: '' }, r)]); }

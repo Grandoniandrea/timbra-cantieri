@@ -1254,7 +1254,7 @@ const SC_VOCI_INIZIALI = [
   ['Visita medica periodica', 'Sorveglianza sanitaria', 12],
   ['Prelievo / esami del sangue', 'Sorveglianza sanitaria', 12],
   ['Accertamento alcol e droghe (autisti)', 'Sorveglianza sanitaria', 12],
-  ['Formazione lavoratori (generale + specifica rischio alto)', 'Formazione', 60],
+  ['Corso sicurezza lavoratori (generale + specifica, rischio alto)', 'Formazione', 60],
   ['Primo soccorso', 'Formazione', 36],
   ['Antincendio', 'Formazione', 60],
   ['Preposto', 'Formazione', 24],
