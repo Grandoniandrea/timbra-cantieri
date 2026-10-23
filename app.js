@@ -51,7 +51,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 59;
+const APP_VERSION = 60;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -1253,7 +1253,7 @@ const DEMO_STEPS = [
   { t: 'Modulo ore settimanale', d: 'Il modulo cartaceo GE3CO si compila da solo con le timbrature: 5 ore fisse per cantiere. Si stampa o si invia in PDF.', run: () => { modShow(DEMO.lastMon); } },
   { t: 'Stima della busta paga', d: 'Ogni operatore vede una stima del netto del mese. Le ore extra restano a parte finché non vengono autorizzate.', run: () => { payMode = 'fine'; payShow(monthNow()); } },
   { t: 'Area del responsabile', d: 'Protetta da password e invisibile agli operatori. Da qui si gestisce tutto.', run: () => { adminPwd = 'demo'; adminExtraCount = DEMO.srv.extra.length; adminAbsCount = 1; adminHome(); } },
-  { t: 'Programma della settimana', d: 'Le squadre si compongono con le tendine. Lo specchietto mostra subito chi sfora le ore (rosso), chi deve ancora lavorare (grigio) e chi è a posto (verde).', run: () => { planHoursOpen = true; adminPlan(DEMO.mon); } },
+  { t: 'Programma della settimana', d: 'Le squadre si compongono con le tendine. Lo specchietto mostra subito chi sfora le ore (rosso), chi deve ancora lavorare (arancione) e chi è a posto (verde).', run: () => { planHoursOpen = true; adminPlan(DEMO.mon); } },
   { t: 'Ore extra da autorizzare', d: 'Se un turno supera le 5 ore l\'operatore indica il motivo. Il responsabile autorizza o rifiuta con un tocco.', run: () => { call('extra', null, 'Carico', out => adminExtra(out.extra)); } },
   { t: 'Statistiche per cantiere', d: 'Le ore svolte su ogni cantiere nel mese, per tutti o per un singolo operatore. Utili anche per la fatturazione ai comuni.', run: () => {
       adminMonth = monthNow(); call('timbrature', monthParts(adminMonth), 'Carico', out => { statsShifts = out.timbrature; statsSites = out.cantieri; adminStats(''); }); } },
@@ -1708,16 +1708,25 @@ function planHoursBox() {
     return { nome, x, tot, max, diff, st: diff > 0 ? 'over' : diff === 0 ? 'ok' : 'under' };
   }).sort((a, b) => ({ over: 0, under: 1, ok: 2 })[a.st] - ({ over: 0, under: 1, ok: 2 })[b.st] || (a.st === 'over' ? b.diff - a.diff : a.diff - b.diff) || a.nome.localeCompare(b.nome));
   const n = st => rows.filter(r => r.st === st).length;
-  return `<details class="ore-box" ${planHoursOpen ? 'open' : ''} id="oreBox">
-    <summary><b>⏱️ Ore della settimana</b>
-      <span class="ore-cnt">${n('over') ? `<i class="o-over">${n('over')} oltre</i>` : ''}${n('under') ? `<i class="o-under">${n('under')} sotto</i>` : ''}${n('ok') ? `<i class="o-ok">${n('ok')} ok</i>` : ''}</span></summary>
-    <div class="ore-grid">${rows.map(r => `<div class="ore-row o-${r.st}">
-      <span class="ore-nome">${esc(r.nome)}</span>
-      <span class="ore-num">${r.tot}/${r.max} h${r.x.ferie ? ` <small>🌴${r.x.ferie}</small>` : ''}</span>
-      <span class="ore-diff">${r.diff > 0 ? `+${r.diff} oltre` : r.diff < 0 ? `mancano ${-r.diff}` : '✓'}</span>
-      <span class="ore-bar"><span style="width:${Math.min(100, r.tot / r.max * 100)}%"></span></span>
+  const fmtH = v => String(v).replace('.', ',');
+  const stato = { over: 'Oltre', under: 'Sotto', ok: 'In regola' };
+  return `<details class="ore-box oh" ${planHoursOpen ? 'open' : ''} id="oreBox">
+    <summary class="oh-head">
+      <span class="oh-title"><b>Ore della settimana</b></span>
+      <span class="oh-chips">${['over', 'under', 'ok'].filter(st => n(st)).map(st => `<span class="oh-chip oh-${st}" title="${stato[st]}"><i></i>${n(st)} ${({ over: 'oltre', under: 'sotto', ok: 'ok' })[st]}</span>`).join('')}</span>
+      <svg class="oh-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+    </summary>
+    <div class="oh-list">${rows.map(r => `<div class="oh-row oh-${r.st}">
+      <div class="oh-line">
+        <span class="oh-nome">${esc(r.nome)}${r.x.ferie ? `<em>${fmtH(r.x.ferie)} h ferie/perm.</em>` : ''}</span>
+        <span class="oh-ore"><b>${fmtH(r.tot)}</b><span>/${fmtH(r.max)} h</span></span>
+      </div>
+      <div class="oh-barline">
+        <div class="oh-bar"><span style="width:${Math.min(100, r.max ? r.tot / r.max * 100 : 0)}%"></span></div>
+        <span class="oh-diff">${r.diff > 0 ? `+${fmtH(r.diff)} h` : r.diff < 0 ? `−${fmtH(-r.diff)} h` : 'in regola'}</span>
+      </div>
     </div>`).join('')}</div>
-    <p class="note">Ogni turno vale ${cfg().oreTurno} h, anche ferie, malattia e permesso (🌴 = ore di assenza). Le ore da contratto si cambiano in 👥 Operatori.</p>
+    <p class="note">Ogni turno conta le ore del suo cantiere (Geofor ${cfg().oreTurno} h, Ecofor Service ed Ecoacciai 8 h); ferie, malattia e permesso contano ${cfg().oreTurno} h. Le ore da contratto si cambiano in Operatori.</p>
   </details>`;
 }
 let planHoursOpen = true;
