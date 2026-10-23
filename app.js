@@ -43,7 +43,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 52;
+const APP_VERSION = 53;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -242,12 +242,9 @@ function render() {
   // Cantieri divisi per committente: in alto i loghi, toccandone uno si aprono i suoi cantieri
   const fissoSite = db.fisso ? db.sites.find(s => !s.hidden && s.name === db.fisso) : null;
   const tutti = db.sites.filter(s => !s.hidden);
-  const activeSite = db.active ? db.sites.find(s => s.id === db.active.siteId) : null;
-  const def = (activeSite && committenteDi(activeSite.name)) || (fissoSite && committenteDi(fissoSite.name)) || CLIENTI[0].id;
-  if (!db.openClient || !CLIENTI.some(c => c.id === db.openClient) || (db.active && activeSite && db.openClientFor !== db.active.id)) {
-    db.openClient = def; if (db.active) db.openClientFor = db.active.id;
-  }
-  const open = db.openClient;
+  // Chiusi finché non si tocca un logo; solo chi ha un impianto fisso lo trova già aperto
+  if (db.clienteAperto === undefined) db.clienteAperto = fissoSite ? committenteDi(fissoSite.name) : '';
+  const open = CLIENTI.some(c => c.id === db.clienteAperto) ? db.clienteAperto : '';
   $('#clients').innerHTML = CLIENTI.map(c => {
     const n = tutti.filter(s => committenteDi(s.name) === c.id).length;
     const mine = fissoSite && committenteDi(fissoSite.name) === c.id;
@@ -255,7 +252,8 @@ function render() {
       <span class="client-logo"><img src="${c.logo}" alt="${esc(c.nome)}"></span>
       <span class="client-n">${mine ? '🏭 ' : ''}${n} cantier${n === 1 ? 'e' : 'i'}</span></button>`;
   }).join('');
-  const shown = tutti.filter(s => committenteDi(s.name) === open).sort((a, b) => (b === fissoSite) - (a === fissoSite));
+  const shown = open ? tutti.filter(s => committenteDi(s.name) === open).sort((a, b) => (b === fissoSite) - (a === fissoSite)) : [];
+  $('#sites').hidden = !open;
   const todayPlanned = new Set(myPlan().filter(p => p.data === isoDay(new Date())).map(p => p.cantiere));
   $('#sites').innerHTML = shown.length ? shown.map(s => {
     const here = db.active && db.active.siteId === s.id;
@@ -266,7 +264,8 @@ function render() {
       <button class="btn" data-in="${s.id}" ${db.active ? 'disabled' : ''}>Entrata</button>
     </li>`;
   }).join('') : `<li class="empty">Nessun cantiere ${esc((CLIENTI.find(c => c.id === open) || {}).nome || '')} per ora.</li>`;
-  document.querySelectorAll('#clients [data-client]').forEach(b => { b.onclick = () => { db.openClient = b.dataset.client; save(); }; });
+  // Tocca un logo per aprire i suoi cantieri, ritoccalo per chiuderli
+  document.querySelectorAll('#clients [data-client]').forEach(b => { b.onclick = () => { db.clienteAperto = db.clienteAperto === b.dataset.client ? '' : b.dataset.client; save(); }; });
 
   // Registro
   const recent = db.shifts.slice(0, 30);
@@ -2073,7 +2072,7 @@ async function syncSites() {
     // Impianto fisso (es. operatori che lavorano sempre nello stesso stabilimento)
     if (out.committenti && JSON.stringify(out.committenti) !== JSON.stringify(db.committenti)) { db.committenti = out.committenti; save(); }
     // Con un impianto fisso nuovo si apre subito il suo committente
-    if ('fisso' in out && (out.fisso || '') !== (db.fisso || '')) { db.fisso = out.fisso || ''; if (db.fisso) db.openClient = committenteDi(db.fisso); save(); }
+    if ('fisso' in out && (out.fisso || '') !== (db.fisso || '')) { db.fisso = out.fisso || ''; if (db.fisso) db.clienteAperto = committenteDi(db.fisso); save(); }
     if (out.config && JSON.stringify(out.config) !== JSON.stringify(db.config)) { db.config = out.config; save(); }
     applyReset();
     const names = out.cantieri;
