@@ -439,13 +439,19 @@ function distanza_(a, b) {
 }
 
 // Esito del controllo sede per una posizione: '' se ok, altrimenti il problema
+// Impianti dei committenti dove si timbra (oltre alla sede GE3CO)
+const IMPIANTI = [
+  { nome: 'Ecofor Service – Via dell\'Industria 2, Pontedera', lat: 43.6500665, lng: 10.5916598, raggio: 350 },
+  { nome: 'Ecoacciai – Via R. Mattioli 1, Pontedera', lat: 43.6424598, lng: 10.5852918, raggio: 350 },
+];
 function fuoriSede_(p, quando) {
   if (!p) return '';
   if (p.errore) return quando + ' senza posizione';
-  const sede = sede_();
-  const d = distanza_(sede, p);
   const margine = Math.min(Number(p.acc) || 0, 100);
-  return d > sede.raggio + margine ? quando + ' a ' + (d >= 1000 ? (d / 1000).toFixed(1).replace('.', ',') + ' km' : Math.round(d) + ' m') + ' dalla sede' : '';
+  // Va bene la sede GE3CO o uno degli impianti: conta il punto più vicino
+  const vicina = [sede_()].concat(IMPIANTI).map(z => ({ z, d: distanza_(z, p) })).sort((a, b) => a.d - b.d)[0];
+  const d = vicina.d;
+  return d > vicina.z.raggio + margine ? quando + ' a ' + (d >= 1000 ? (d / 1000).toFixed(1).replace('.', ',') + ' km' : Math.round(d) + ' m') + ' dalla sede' : '';
 }
 
 // Posizione GPS -> link a Google Maps (o il motivo per cui manca)

@@ -6,9 +6,13 @@ const KEY = 'timbra-cantieri.v1';
 // turno: ore che vale un turno e orario di servizio (null = turni Geofor 06–11 / 13–18 da 5 ore)
 const CLIENTI = [
   { id: 'GEOFOR', nome: 'Geofor', logo: 'logo-geofor.png', turno: null },
-  { id: 'ECOFOR SERVICE', nome: 'Ecofor Service', logo: 'logo-ecofor.png', turno: { ore: 8, inizio: '07:00', fine: '15:30', giorni: 'lunedì–venerdì' } },
-  { id: 'ECOACCIAI', nome: 'Ecoacciai', logo: 'logo-ecoacciai.png', turno: { ore: 8, inizio: '08:00', fine: '16:00', giorni: '' } },
+  { id: 'ECOFOR SERVICE', nome: 'Ecofor Service', logo: 'logo-ecofor.png', turno: { ore: 8, inizio: '07:00', fine: '15:30', giorni: 'lunedì–venerdì' },
+    sede: { nome: 'Ecofor Service – Via dell\'Industria 2, Pontedera', lat: 43.6500665, lng: 10.5916598, raggio: 350 } },
+  { id: 'ECOACCIAI', nome: 'Ecoacciai', logo: 'logo-ecoacciai.png', turno: { ore: 8, inizio: '08:00', fine: '16:00', giorni: '' },
+    sede: { nome: 'Ecoacciai – Via R. Mattioli 1, Pontedera', lat: 43.6424598, lng: 10.5852918, raggio: 350 } },
 ];
+// Dove si può timbrare: la sede GE3CO e gli impianti dei committenti (chi lavora lì timbra all'impianto)
+const zoneTimbratura = () => [cfg().sede].concat(CLIENTI.map(c => c.sede)).filter(z => z && isFinite(z.lat));
 const turnoCliente = nome => (CLIENTI.find(c => c.id === committenteDi(nome)) || {}).turno || null;
 // Ore che vale un turno su quel cantiere
 const oreTurnoDi = nome => (turnoCliente(nome) || {}).ore || cfg().oreTurno;
@@ -47,7 +51,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 56;
+const APP_VERSION = 57;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -131,11 +135,13 @@ async function requireSede(what, cb) {
     return retry('📍 Posizione non disponibile',
       `Per timbrare serve la posizione del telefono (${esc(pos.errore)}). Attiva la Localizzazione e consenti l'accesso alla posizione per questo sito, poi riprova.`);
   }
-  if (sede && isFinite(sede.lat)) {
-    const d = distanza(sede, pos);
-    if (d > sede.raggio + Math.min(pos.acc || 0, 100)) {
+  const zone = zoneTimbratura();
+  if (zone.length) {
+    // Basta essere dentro una delle zone: sede GE3CO, Ecofor Service o Ecoacciai
+    const vicina = zone.map(z => ({ z, d: distanza(z, pos) })).sort((a, b) => a.d - b.d)[0];
+    if (vicina.d > vicina.z.raggio + Math.min(pos.acc || 0, 100)) {
       return retry('🚫 Non sei in sede',
-        `Sei a <b>${fmtDist(d)}</b> dalla sede (${esc(sede.nome || 'sede')}). L'${esc(what)} si timbra solo in sede.`);
+        `Sei a <b>${fmtDist(vicina.d)}</b> dal punto di timbratura più vicino (${esc(vicina.z.nome || 'sede')}). L'${esc(what)} si timbra in sede o all'impianto.`);
     }
   }
   if (dlg.open) dlg.close();

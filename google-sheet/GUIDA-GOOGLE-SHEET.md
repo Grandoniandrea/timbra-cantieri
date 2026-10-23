@@ -103,3 +103,12 @@ In `Codice.gs`, `TURNI_COMMITTENTE`: Ecofor Service turno 07:00–15:30 (vale 8 
 Ecoacciai turno di 8 ore dalle 08:00. Riepiloghi, extra e avviso di uscita dimenticata usano le ore del cantiere.
 Gli operatori fissi si impostano nella scheda Operatori, colonna "Cantiere fisso"
 (Abenaim → ECOFOR SERVICE; Lupi e Gora → ECOACCIAI).
+
+## Aggiornamento: timbrature agli impianti (versione 57)
+
+Oltre alla sede GE3CO si può timbrare anche agli impianti dei committenti, entro 350 m:
+
+- Ecofor Service, Via dell'Industria 2, Pontedera
+- Ecoacciai, Via Raffaele Mattioli 1, Pontedera
+
+Nello script sono nella lista `IMPIANTI` in cima a `fuoriSede_`. Per spostare un punto o allargare il raggio, cambia lì i numeri e ripubblica il deployment. Finché lo script non è aggiornato, le timbrature fatte agli impianti arrivano nel foglio segnate FUORI SEDE.
