@@ -24,11 +24,13 @@ Serve un Mac con Xcode (App Store), Node.js e CocoaPods (`brew install cocoapods
      (Personal Team), scegliere l'iPhone collegato e premere ▶.
    - **Da terminale** (in `ios/App`, con l'iPhone collegato e sbloccato):
      ```
-     xcodebuild -workspace App.xcworkspace -scheme App -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath build DEVELOPMENT_TEAM=<ID team> ENABLE_USER_SCRIPT_SANDBOXING=NO -allowProvisioningUpdates build
+     xcodebuild -workspace App.xcworkspace -scheme App -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath ../build DEVELOPMENT_TEAM=<ID team> ENABLE_USER_SCRIPT_SANDBOXING=NO -allowProvisioningUpdates build
      xcrun devicectl list devices
-     xcrun devicectl device install app --device <UDID> build/Build/Products/Debug-iphoneos/App.app
+     xcrun devicectl device install app --device <UDID> ../build/Build/Products/Debug-iphoneos/App.app
      xcrun devicectl device process launch --device <UDID> it.grandoni.timbracantieri
      ```
+     La compilazione va in `ios/build`: non usare `ios/App/build`, altrimenti `npm run ios` si blocca
+     ("Could not delete … App/build"); in quel caso cancellare la cartella `ios/App/build`.
      L'ID team si vede in Xcode (Settings → Accounts) ed è anche in `ios/App/App.xcodeproj` dopo il primo ▶ da Xcode.
      `ENABLE_USER_SCRIPT_SANDBOXING=NO` serve perché altrimenti Xcode blocca lo script di CocoaPods
      (`patch-ios.js` lo imposta già nel progetto; sulla riga di comando è una sicurezza in più).
