@@ -1589,7 +1589,7 @@ async function planMeseLoad() {
       withTimeout(adminCall('timbrature', { anno: oggi.getFullYear(), mese: oggi.getMonth() }), 30000),
       withTimeout(adminCall('programma', { da, a: chiave }), 30000)]);
     if (!t || !t.ok) return;
-    planMese = { chiave, at: Date.now(), giorni: oggi.getDate(), meseNome: oggi.toLocaleDateString('it-IT', { month: 'long' }),
+    planMese = { chiave, at: Date.now(), giorni: oggi.getDate(), giorniMese: new Date(oggi.getFullYear(), oggi.getMonth() + 1, 0).getDate(), meseNome: oggi.toLocaleDateString('it-IT', { month: 'long' }),
       turni: (t.timbrature || []).filter(x => x.end && x.start <= oggi.getTime() && !/^PROVA/.test(x.sede || '')),
       ass: p && p.ok ? (p.squadre || []).filter(q => isAss(q.turno) && q.data <= chiave) : [] };
     const box = document.getElementById('oreBox');
@@ -1604,8 +1604,10 @@ function oreMeseDi(nome) {
     if (t.extra && t.statoExtra === 'Autorizzato') fatte += Number(t.extra) || 0;
   });
   planMese.ass.forEach(q => { if (q.operatori.some(o => stessoOperatore(nome, o))) ass += cfg().oreTurno; });
-  const attese = Math.round(oreContratto(nome) * planMese.giorni / 7);
-  return { fatte, ass, tot: fatte + ass, attese, saldo: Math.round((fatte + ass - attese) * 10) / 10 };
+  // Mese = 4 settimane di contratto (30 h → 120 h); a oggi = la parte dei giorni già passati del mese
+  const mese = oreContratto(nome) * 4;
+  const attese = Math.round(mese * planMese.giorni / planMese.giorniMese);
+  return { fatte, ass, tot: fatte + ass, attese, mese, saldo: Math.round((fatte + ass - attese) * 10) / 10 };
 }
 function planView() {
   const isD = doppi(planSquads);
@@ -1762,12 +1764,12 @@ function planHoursBox() {
         <span class="oh-diff">${r.diff > 0 ? `+${fmtH(r.diff)} h` : r.diff < 0 ? `−${fmtH(-r.diff)} h` : 'in regola'}</span>
       </div>
       ${(m => m ? `<div class="oh-mese">
-        <span>${esc(planMese.meseNome)} a oggi: <b>${fmtH(m.tot)}</b> / ${fmtH(m.attese)} h${m.ass ? ` <small>(di cui ${fmtH(m.ass)} h assenze)</small>` : ''}</span>
+        <span>${esc(planMese.meseNome)}: fatte <b>${fmtH(m.tot)}</b> h · a oggi ${fmtH(m.attese)} su ${fmtH(m.mese)}${m.ass ? ` <small>(di cui ${fmtH(m.ass)} h assenze)</small>` : ''}</span>
         ${m.saldo < 0 ? `<i class="oh-rec">da recuperare ${fmtH(-m.saldo)} h</i>` : m.saldo > 0 ? `<i class="oh-piu">+${fmtH(m.saldo)} h</i>` : '<i class="oh-pari">in pari</i>'}
       </div>` : '')(oreMeseDi(r.nome))}
     </div>`).join('')}</div>
     ${planMese ? '' : '<p class="note oh-carico">Carico le ore del mese…</p>'}
-    <p class="note">Mese a oggi: timbrature fatte (con gli extra autorizzati) + assenze del programma, confrontate con le ore da contratto fino a oggi. Chi ha ore da recuperare può coprire le assenze.<br>Ogni turno conta le ore del suo cantiere (Geofor ${cfg().oreTurno} h, Ecofor Service ed Ecoacciai 8 h); ferie, malattia e permesso contano ${cfg().oreTurno} h. Le ore da contratto si cambiano in Operatori.</p>
+    <p class="note">Mese a oggi: timbrature fatte (con gli extra autorizzati) + assenze del programma, confrontate con le ore da contratto fino a oggi (il mese vale 4 settimane: 30 h → 120 h). Chi ha ore da recuperare può coprire le assenze.<br>Ogni turno conta le ore del suo cantiere (Geofor ${cfg().oreTurno} h, Ecofor Service ed Ecoacciai 8 h); ferie, malattia e permesso contano ${cfg().oreTurno} h. Le ore da contratto si cambiano in Operatori.</p>
   </details>`;
 }
 let planHoursOpen = true;
