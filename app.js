@@ -51,7 +51,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 63;
+const APP_VERSION = 64;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -1599,7 +1599,7 @@ function planView() {
             </button>`).join('')}
             <button class="plan-add" value="add:${d}:${t.nome}" formnovalidate>+ Squadra</button></div>`;
         }).join('')}
-        <button class="plan-ferie" value="ferie:${d}" formnovalidate>${assDay(planSquads, d) || '🌴 + Ferie, malattia, permesso'}</button>
+        <button class="plan-ferie ${assDay(planSquads, d) ? 'pf-on' : 'pf-vuoto'}" value="ferie:${d}" formnovalidate>${assDay(planSquads, d) || '+ Aggiungi assenza'}</button>
       </div>`).join('')}</div>
     <p class="note"><span class="nm doppio">Nome</span> = doppio turno quel giorno.</p>
     <div class="menu">
