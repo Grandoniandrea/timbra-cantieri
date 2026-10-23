@@ -185,6 +185,10 @@ function admin_(req) {
     case 'elimina': remove_(req.id); return { ok: true };
     case 'extra': return { ok: true, extra: extraInAttesa_() };
     case 'dpi': return dpi_();
+    case 'scad': return scadenze_();
+    case 'scadreg': registraScadenza_(req.reg); return scadenze_();
+    case 'scadelimina': eliminaScadenza_(req.id); return scadenze_();
+    case 'scadvoci': salvaVociScadenze_(req.voci); return scadenze_();
     case 'dpiconsegna': consegnaDpi_(req.consegna); return dpi_();
     case 'dpitaglie': salvaTaglieDpi_(req.operatore, req.taglie); return dpi_();
     case 'dpicapi': salvaCapiDpi_(req.capi); return dpi_();
@@ -694,7 +698,10 @@ function avvisoSerale() {
   const extra = extraInAttesa_();
   const ass = assenze_().filter(a => a.stato === ASS_ATTESA);
   const fuori = dati.filter(r => String(r[COL_SEDE - 1] || '').indexOf('FUORI SEDE') === 0 && r[4] instanceof Date && r[4] >= oggi);
-  if (!aperti.length && !extra.length && !ass.length && !fuori.length) return;
+  // Il lunedì si aggiungono visite mediche e corsi scaduti o in scadenza
+  let scad = [];
+  if (oggi.getDay() === 1) { try { scad = scadenzeVicine_(); } catch (e) { scad = []; } }
+  if (!aperti.length && !extra.length && !ass.length && !fuori.length && !scad.length) return;
   const tz = Session.getScriptTimeZone();
   const f = d => Utilities.formatDate(d, tz, 'dd/MM HH:mm');
   const li = arr => '<ul>' + arr.map(x => '<li>' + x + '</li>').join('') + '</ul>';
@@ -707,10 +714,13 @@ function avvisoSerale() {
     li(extra.map(x => '<b>' + x.dip + '</b> · ' + x.cantiere + ' · +' + String(x.extra).replace('.', ',') + ' h · ' + (x.motivo || '') + (x.nota ? ' – ' + x.nota : '')));
   if (ass.length) html += '<h3>Ferie e permessi da approvare (' + ass.length + ')</h3>' +
     li(ass.map(x => '<b>' + x.dip + '</b> · ' + x.tipo + ' · ' + x.dal + (x.al && x.al !== x.dal ? ' → ' + x.al : '') + (x.ore ? ' · ' + x.ore + ' h' : '')));
+  if (scad.length) html += '<h3>Visite mediche e corsi in scadenza (' + scad.length + ')</h3>' +
+    li(scad.map(x => '<b>' + x.operatore + '</b> · ' + x.voce + ' · ' + (x.giorni < 0 ? 'scaduto da ' + (-x.giorni) + ' giorni' : 'scade tra ' + x.giorni + ' giorni') +
+      ' (' + Utilities.formatDate(daIso_(x.scadenza), tz, 'dd/MM/yyyy') + ')'));
   html += '<p>Si sistemano dall\'app: tieni premuto il logo GE3CO → Area responsabile.</p>';
   MailApp.sendEmail({
     to: EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail(),
-    subject: 'GE3CO – Da sistemare oggi (' + (aperti.length + extra.length + ass.length + fuori.length) + ')',
+    subject: 'GE3CO – Da sistemare oggi (' + (aperti.length + extra.length + ass.length + fuori.length + scad.length) + ')',
     htmlBody: html,
   });
 }
@@ -1232,4 +1242,94 @@ function committenti_() {
     if (nome && c) out[nome] = c;
   });
   return out;
+}
+
+// ---------- Visite mediche e corsi di formazione (solo responsabile) ----------
+// Schede: "Scadenze Voci" (cosa si controlla e ogni quanti mesi) e "Scadenze" (una riga per voce fatta, con la scadenza).
+// Si registrano solo date: niente esiti, giudizi o dati sanitari (restano al medico competente).
+const FOGLIO_SC_VOCI = 'Scadenze Voci', FOGLIO_SC = 'Scadenze';
+const INTEST_SC = ['ID', 'Operatore', 'Voce', 'Categoria', 'Fatto il', 'Scadenza', 'Note', 'Registrato'];
+// Durate indicative per il settore igiene urbana: da confermare con RSPP e medico competente
+const SC_VOCI_INIZIALI = [
+  ['Visita medica periodica', 'Sorveglianza sanitaria', 12],
+  ['Prelievo / esami del sangue', 'Sorveglianza sanitaria', 12],
+  ['Accertamento alcol e droghe (autisti)', 'Sorveglianza sanitaria', 12],
+  ['Formazione lavoratori (generale + specifica rischio alto)', 'Formazione', 60],
+  ['Primo soccorso', 'Formazione', 36],
+  ['Antincendio', 'Formazione', 60],
+  ['Preposto', 'Formazione', 24],
+  ['RLS', 'Formazione', 12],
+  ['Gru su autocarro (ragno)', 'Abilitazioni', 60],
+  ['Carrello elevatore', 'Abilitazioni', 60],
+  ['Piattaforme di lavoro elevabili (PLE)', 'Abilitazioni', 60],
+  ['Segnaletica e lavori su strada', 'Formazione', 48],
+  ['Patente C', 'Patenti e CQC', 60],
+  ['CQC merci', 'Patenti e CQC', 60],
+  ['ADR (rifiuti pericolosi)', 'Patenti e CQC', 60],
+];
+const SC_FINESTRA_GIORNI = 60; // "in scadenza" = entro 60 giorni (i corsi vanno prenotati per tempo)
+
+const scVociSh_ = () => foglioDpi_(FOGLIO_SC_VOCI, ['Voce', 'Categoria', 'Ogni quanti mesi', 'Attiva'], SC_VOCI_INIZIALI.map(v => v.concat(['SI'])));
+function scSh_() {
+  const sh = foglioDpi_(FOGLIO_SC, INTEST_SC);
+  sh.getRange('E:F').setNumberFormat('dd/mm/yyyy');
+  sh.getRange('H:H').setNumberFormat('dd/mm/yyyy HH:mm');
+  return sh;
+}
+
+function scadenze_() {
+  const voci = righe_(scVociSh_(), 4).filter(r => String(r[0]).trim())
+    .map(r => ({ nome: String(r[0]).trim(), cat: String(r[1] || 'Formazione'), mesi: Number(r[2]) || 0, attiva: String(r[3]).toUpperCase() !== 'NO' }));
+  const righe = righe_(scSh_(), INTEST_SC.length).filter(r => r[0] && r[4] instanceof Date)
+    .map(r => ({ id: String(r[0]), operatore: String(r[1]), voce: String(r[2]), cat: String(r[3] || ''), fatto: dataIso_(r[4]),
+      scadenza: r[5] instanceof Date ? dataIso_(r[5]) : '', note: String(r[6] || '') }))
+    .sort((a, b) => b.fatto.localeCompare(a.fatto));
+  return { ok: true, voci, righe, operatori: operatori_() };
+}
+
+/** Registra una voce fatta. Se la scadenza non è indicata si calcola dalla durata della voce. */
+function registraScadenza_(x) {
+  const fatto = daIso_(x && x.fatto), nome = String(x && x.operatore || '').trim(), voce = String(x && x.voce || '').trim();
+  if (!fatto || !nome || !voce) return;
+  const v = righe_(scVociSh_(), 4).find(r => String(r[0]).trim().toLowerCase() === voce.toLowerCase());
+  const mesi = v ? Number(v[2]) || 0 : 0;
+  const scad = daIso_(x.scadenza) || (mesi ? new Date(fatto.getFullYear(), fatto.getMonth() + mesi, fatto.getDate()) : '');
+  const sh = scSh_();
+  const id = String(x.id || Utilities.getUuid()).slice(0, 40);
+  const riga = [id, nome.slice(0, 60), voce.slice(0, 80), v ? String(v[1]) : '', fatto, scad, String(x.note || '').slice(0, 200), new Date()];
+  const r = trovaRiga_(sh, id);
+  if (r) sh.getRange(r, 1, 1, riga.length).setValues([riga]);
+  else sh.appendRow(riga);
+}
+
+function eliminaScadenza_(id) {
+  const sh = scSh_();
+  const r = trovaRiga_(sh, id);
+  if (r) sh.deleteRow(r);
+}
+
+function salvaVociScadenze_(lista) {
+  if (!Array.isArray(lista)) return;
+  const visti = {};
+  const righe = lista.map(v => {
+    const nome = String(v && v.nome || '').trim().slice(0, 80);
+    if (!nome || visti[nome.toLowerCase()]) return null;
+    visti[nome.toLowerCase()] = true;
+    return [nome, String(v.cat || 'Formazione').slice(0, 40), Math.max(0, Math.min(240, Number(v.mesi) || 0)), v.attiva === false ? 'NO' : 'SI'];
+  }).filter(Boolean);
+  const sh = scVociSh_();
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 4).clearContent();
+  if (righe.length) sh.getRange(2, 1, righe.length, 4).setValues(righe);
+}
+
+/** Ultima registrazione per operatore e voce, scaduta o in scadenza entro la finestra. */
+function scadenzeVicine_() {
+  const d = scadenze_();
+  const ultime = {};
+  d.righe.forEach(r => { const k = r.operatore.toLowerCase() + '|' + r.voce.toLowerCase(); if (!ultime[k] || ultime[k].fatto < r.fatto) ultime[k] = r; });
+  const oggi = new Date(); oggi.setHours(0, 0, 0, 0);
+  const limite = new Date(oggi.getTime() + SC_FINESTRA_GIORNI * 864e5);
+  return Object.values(ultime).filter(r => r.scadenza && daIso_(r.scadenza) <= limite)
+    .map(r => Object.assign(r, { giorni: Math.round((daIso_(r.scadenza) - oggi) / 864e5) }))
+    .sort((a, b) => a.scadenza.localeCompare(b.scadenza));
 }

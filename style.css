@@ -465,3 +465,9 @@ body.demo-on dialog[open] { position: fixed; inset: 10px 0 auto; z-index: 50; ma
 .client-n { font-size: 12px; font-weight: 700; color: var(--muted); }
 .client.on .client-n { color: var(--brand); }
 .client:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+
+/* Timbrature chiuse dietro un tasto */
+.log-toggle { width: 100%; margin-top: 8px; }
+/* Visite e corsi */
+.sc-cat { display: grid; gap: 6px; }
+.sc-cat small { color: var(--muted); }

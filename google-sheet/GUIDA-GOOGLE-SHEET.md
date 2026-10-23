@@ -90,3 +90,10 @@ Si installa con il file completo `Codice.gs` e una nuova versione del deployment
 Scheda Cantieri, colonna E "Committente": GEOFOR, ECOFOR SERVICE o ECOACCIAI (vuoto = GEOFOR).
 Nell'app i cantieri sono raggruppati sotto i loghi dei committenti. Senza questa colonna l'app li
 riconosce dal nome (chi contiene ECOFOR o ECOACCIAI, il resto Geofor).
+
+## Aggiornamento: visite mediche e corsi di formazione
+Schede "Scadenze Voci" (visite, corsi, abilitazioni e ogni quanti mesi si rinnovano) e "Scadenze"
+(una riga per voce fatta, con la data e la scadenza). Si salvano solo le date, niente esiti sanitari.
+Ogni lunedì l'avviso delle 20 aggiunge le voci scadute o in scadenza nei 60 giorni.
+Le durate iniziali sono indicative per l'igiene urbana: vanno confermate con RSPP e medico competente.
+Si installa con il file completo `Codice.gs` e una nuova versione del deployment.

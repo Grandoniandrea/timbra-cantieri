@@ -43,7 +43,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 53;
+const APP_VERSION = 54;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -267,7 +267,10 @@ function render() {
   // Tocca un logo per aprire i suoi cantieri, ritoccalo per chiuderli
   document.querySelectorAll('#clients [data-client]').forEach(b => { b.onclick = () => { db.clienteAperto = db.clienteAperto === b.dataset.client ? '' : b.dataset.client; save(); }; });
 
-  // Registro
+  // Registro: chiuso dietro un tasto per tenere pulita la pagina
+  $('#btnLog').textContent = db.showLog ? 'Nascondi le timbrature' : `🕘 Le mie timbrature${db.shifts.length ? ` (${db.shifts.length})` : ''}`;
+  $('#btnLog').setAttribute('aria-expanded', String(!!db.showLog));
+  $('#log').hidden = !db.showLog;
   const recent = db.shifts.slice(0, 30);
   $('#log').innerHTML = recent.length ? recent.map(s => {
     const site = siteById(s.siteId);
@@ -554,6 +557,7 @@ function showNfcLink() {
     a => { if (a === 'copy') navigator.clipboard.writeText(link).then(() => toast('Link copiato'), () => {}); });
 }
 $('#btnAddSite').onclick = () => editSite(null);
+$('#btnLog').onclick = () => { db.showLog = !db.showLog; save(); };
 
 // ---------- Toast con Annulla ----------
 let toastTimer;
@@ -1182,6 +1186,23 @@ function demoServer(azione, x) {
     case 'eliminaintervento': s.interventi = s.interventi.filter(v => v.id !== x.id); return intOut();
     case 'riapriintervento': s.interventi.forEach(v => { if (v.id === x.id) v.stato = 'Da fare'; }); return intOut();
     case 'fotointervento': return ok({ foto: x.tipo === 'prima' ? s.foto.prima : x.tipo === 'dopo' ? s.foto.dopo : (s.foto['shot' + x.id] || s.foto.shot) });
+    case 'scad': case 'scadreg': case 'scadelimina': case 'scadvoci': {
+      if (!s.sc) {
+        const v = (n, c, m) => ({ nome: n, cat: c, mesi: m, attiva: true });
+        const oggi = isoDay(new Date()), f = (op, voce, giorni, mesi) => { const d = dayFromIso(addDays(oggi, -giorni)); const sc = new Date(d); sc.setMonth(sc.getMonth() + mesi);
+          return { id: 'sc' + op + voce, operatore: op, voce, cat: '', fatto: isoDay(d), scadenza: isoDay(sc), note: '' }; };
+        s.sc = { voci: [v('Visita medica periodica', 'Sorveglianza sanitaria', 12), v('Prelievo / esami del sangue', 'Sorveglianza sanitaria', 12),
+          v('Formazione lavoratori (generale + specifica rischio alto)', 'Formazione', 60), v('Primo soccorso', 'Formazione', 36), v('Antincendio', 'Formazione', 60),
+          v('Preposto', 'Formazione', 24), v('Gru su autocarro (ragno)', 'Abilitazioni', 60), v('Patente C', 'Patenti e CQC', 60), v('CQC merci', 'Patenti e CQC', 60)],
+          righe: [f('Mario Rossi', 'Visita medica periodica', 340, 12), f('Mario Rossi', 'Prelievo / esami del sangue', 340, 12), f('Mario Rossi', 'Primo soccorso', 1080, 36),
+            f('Mario Rossi', 'Formazione lavoratori (generale + specifica rischio alto)', 400, 60), f('Bianchi', 'Visita medica periodica', 380, 12),
+            f('Bianchi', 'Preposto', 600, 24), f('Verdi', 'Gru su autocarro (ragno)', 200, 60), f('Neri', 'Visita medica periodica', 100, 12)] };
+      }
+      if (azione === 'scadreg') { const r = x.reg; s.sc.righe = s.sc.righe.filter(y => y.id !== r.id).concat([Object.assign({ cat: '' }, r)]); }
+      if (azione === 'scadelimina') s.sc.righe = s.sc.righe.filter(y => y.id !== x.id);
+      if (azione === 'scadvoci') s.sc.voci = x.voci;
+      return ok({ voci: s.sc.voci, righe: s.sc.righe.slice().sort((a, b) => b.fatto.localeCompare(a.fatto)), operatori: s.ops });
+    }
     case 'dpi': return dpiOut();
     case 'dpiconsegna': { const c = x.consegna; const mesi = n => (s.dpi.capi.find(v => v.nome === n) || {}).mesi || 0;
       c.righe.forEach((r, i) => { const d = dayFromIso(c.data); const m = mesi(r.capo); d.setMonth(d.getMonth() + m);
@@ -1227,6 +1248,7 @@ const DEMO_STEPS = [
       adminMonth = monthNow(); call('timbrature', monthParts(adminMonth), 'Carico', out => { statsShifts = out.timbrature; statsSites = out.cantieri; adminStats(''); }); } },
   { t: 'Interventi da assegnare', d: 'Il responsabile crea l\'intervento con lo screenshot della segnalazione e vede quelli fatti, con le foto e l\'ora.', run: () => { adminInterventi(); } },
   { t: 'DPI e vestiario', d: 'Consegne, taglie e scadenze di ogni operatore. L\'app dice cosa è scaduto e prepara l\'elenco da ordinare.', run: () => { dpiLoad(dpiScadView); } },
+  { t: 'Visite mediche e corsi', d: 'Per ogni operatore le scadenze di visita medica, prelievo, primo soccorso, preposto e abilitazioni. Ogni lunedì arriva l\'elenco di quelle vicine.', run: () => { scLoad(scScadView); } },
   { t: 'Fine della demo', d: 'In più: avvisi automatici al responsabile, report mensile via email, ferie e permessi, codice di accesso aziendale. Esci per tornare ai tuoi dati.', run: () => { demoClose(); demoScroll(); } },
 ];
 function demoTourEl() {
@@ -1295,6 +1317,145 @@ function demoStop() {
   db = load(); db.queue = db.queue || []; db.endpoint = db.endpoint || DEFAULT_ENDPOINT;
   render(); window.scrollTo({ top: 0 });
   toast('Demo finita: sei tornato ai tuoi dati');
+}
+
+// ---------- Visite mediche e corsi (solo area responsabile) ----------
+// Per ogni operatore: quando è stata fatta ogni voce e quando scade. Solo date, niente esiti sanitari.
+let scData = null;
+const SC_FINESTRA = 60;
+const scDays = iso => iso ? Math.round((dayFromIso(iso) - dayFromIso(isoDay(new Date()))) / 864e5) : null;
+const scStato = r => { const g = scDays(r && r.scadenza); return g === null ? 'na' : g < 0 ? 'over' : g <= SC_FINESTRA ? 'under' : 'ok'; };
+const scTxt = r => { const g = scDays(r.scadenza); return g === null ? 'senza scadenza' : g < 0 ? `scaduto da ${-g} g` : g === 0 ? 'scade oggi' : `scade tra ${g} g`; };
+const scCats = () => [...new Set(scData.voci.map(v => v.cat))];
+function scLoad(then) {
+  call('scad', null, 'Carico visite e corsi', out => {
+    if (!Array.isArray(out.voci)) return fail('Per usare visite e corsi va aggiornato lo script Google (guida nel repository).');
+    scData = out; then();
+  });
+}
+function adminScad() { scLoad(scHome); }
+function scPeople() { return (scData.operatori || []).filter(o => o.attivo !== false).map(o => o.nome); }
+// Ultima registrazione per ogni voce di un operatore
+function scUltime(nome) {
+  const m = {};
+  scData.righe.filter(r => sameName(r.operatore, nome)).forEach(r => { if (!m[r.voce] || m[r.voce].fatto < r.fatto) m[r.voce] = r; });
+  return m;
+}
+function scVicine() {
+  const out = [];
+  scPeople().forEach(n => Object.values(scUltime(n)).forEach(r => { const st = scStato(r); if (st === 'over' || st === 'under') out.push(r); }));
+  return out.sort((a, b) => a.scadenza.localeCompare(b.scadenza));
+}
+function scHome() {
+  const v = scVicine(), over = v.filter(r => scStato(r) === 'over').length;
+  openDialog(`
+    <h3>🩺 Visite mediche e corsi</h3>
+    <p class="note">Per ogni operatore: visite, esami, corsi e abilitazioni con le scadenze. Si salvano solo le date, niente esiti.</p>
+    <button class="btn" value="new">➕ Registra visita o corso</button>
+    <div class="menu">
+      <button class="btn ghost" value="op">👤 Per operatore</button>
+      <button class="btn ghost" value="scad">⏰ In scadenza${v.length ? ` <span class="badge">${v.length}</span>` : ''}${over ? ` <small class="dpi-red">${over} scadut${over === 1 ? 'o' : 'i'}</small>` : ''}</button>
+      <button class="btn ghost" value="voci">⚙️ Visite, corsi e durata</button>
+      <button class="btn ghost" value="back">Indietro</button>
+    </div>`, a => {
+    const go = { new: () => scReg(), op: scPickOp, scad: scScadView, voci: scVociEdit, back: adminHome }[a];
+    if (go) setTimeout(go, 50);
+  });
+}
+function scReg(pre, back) {
+  const people = scPeople();
+  const voci = scData.voci.filter(v => v.attiva || (pre && v.nome === pre.voce));
+  const p = Object.assign({ operatore: people[0] || '', voce: (voci[0] || {}).nome || '', fatto: isoDay(new Date()), scadenza: '', note: '' }, pre || {});
+  const back2 = back || scHome;
+  openDialog(`
+    <h3>${pre && pre.id ? '✎ Modifica' : '➕ Registra visita o corso'}</h3>
+    <label>Operatore<select name="op">${people.concat(p.operatore && !people.includes(p.operatore) ? [p.operatore] : []).map(n => `<option ${n === p.operatore ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
+    <label>Visita o corso<select name="voce" id="scVoce">${scCats().map(c => `<optgroup label="${esc(c)}">${voci.filter(v => v.cat === c).map(v => `<option value="${esc(v.nome)}" data-mesi="${v.mesi}" ${v.nome === p.voce ? 'selected' : ''}>${esc(v.nome)}</option>`).join('')}</optgroup>`).join('')}</select></label>
+    <label>Fatto il<input type="date" name="fatto" id="scFatto" required value="${esc(p.fatto)}"></label>
+    <label>Scade il<input type="date" name="scad" id="scScad" value="${esc(p.scadenza)}"><small class="note" id="scHint"></small></label>
+    <label>Note (facoltative, niente dati sanitari)<input name="note" maxlength="200" value="${esc(p.note)}" placeholder="es. ente del corso, attestato in ufficio"></label>
+    <div class="row">
+      ${pre && pre.id ? '<button class="btn ghost danger-text" value="del" formnovalidate>Elimina</button>' : ''}
+      <button class="btn ghost" value="back" formnovalidate>Annulla</button><button class="btn" value="ok">Salva</button>
+    </div>`, (a, fd) => {
+    if (a === 'back') return setTimeout(back2, 50);
+    if (a === 'del') {
+      if (!confirm('Eliminare questa registrazione?')) return false;
+      return setTimeout(() => call('scadelimina', { id: pre.id }, 'Elimino', out => { scData = out; toast('Eliminata'); back2(); }), 50);
+    }
+    const reg = { id: pre && pre.id || uid(), operatore: String(fd.get('op') || ''), voce: String(fd.get('voce') || ''), fatto: String(fd.get('fatto') || ''),
+      scadenza: String(fd.get('scad') || ''), note: String(fd.get('note') || '').trim() };
+    if (!reg.operatore || !reg.voce || !reg.fatto) { alert('Servono operatore, voce e data.'); return false; }
+    setTimeout(() => call('scadreg', { reg }, 'Salvo', out => { scData = out; toast('Registrato ✓'); scOp(reg.operatore); }), 50);
+  });
+  // La scadenza si propone da sola: data + durata della voce (si può cambiare a mano)
+  const calc = () => {
+    const o = $('#scVoce').selectedOptions[0], m = Number(o && o.dataset.mesi) || 0, f = $('#scFatto').value;
+    if (!f) return;
+    if (!m) { $('#scHint').textContent = 'Questa voce non ha scadenza: lascia vuoto o scrivi una data.'; return; }
+    const d = dayFromIso(f); d.setMonth(d.getMonth() + m);
+    $('#scScad').value = isoDay(d);
+    $('#scHint').textContent = `Calcolata: ${dmyIt(isoDay(d))} (ogni ${m} mesi). Si può cambiare.`;
+  };
+  $('#scVoce').onchange = calc; $('#scFatto').onchange = calc;
+  if (!p.scadenza) calc();
+}
+function scPickOp() {
+  openDialog(`
+    <h3>👤 Visite e corsi per operatore</h3>
+    <div class="adm-list">${scPeople().map(n => {
+      const u = Object.values(scUltime(n)), o = u.filter(r => scStato(r) === 'over').length, s = u.filter(r => scStato(r) === 'under').length;
+      return `<button type="button" class="shift-row dpi-oprow" data-scop="${esc(n)}"><span class="dpi-txt"><b>${esc(n)}</b>
+        <span>${u.length ? `${u.length} registrat${u.length === 1 ? 'a' : 'e'}` : 'Niente registrato'}${o ? ` · <b class="dpi-red">${o} scadut${o === 1 ? 'a' : 'e'}</b>` : ''}${s ? ` · ${s} in scadenza` : ''}</span></span><span class="dpi-gear" aria-hidden="true">⚙️</span></button>`;
+    }).join('') || '<p class="note">Nessun operatore.</p>'}</div>
+    <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(scHome, 50));
+  document.querySelectorAll('[data-scop]').forEach(b => { b.onclick = () => scOp(b.dataset.scop); });
+}
+function scOp(nome) {
+  const u = scUltime(nome);
+  openDialog(`
+    <h3>👤 ${esc(nome)}</h3>
+    ${scCats().map(c => `<div class="sc-cat"><small>${esc(c.toUpperCase())}</small>
+      <div class="dpi-list">${scData.voci.filter(v => v.cat === c && (v.attiva || u[v.nome])).map(v => { const r = u[v.nome];
+        return `<div class="dpi-it ${r ? 'd-' + scStato(r) : 'd-none'}" data-scv="${esc(v.nome)}"><div class="dpi-txt"><b>${esc(v.nome)}</b>
+          <span>${r ? `fatto il ${dmyIt(r.fatto)} · ${scTxt(r)}${r.scadenza ? ` (${dmyIt(r.scadenza)})` : ''}` : 'non registrato'}</span></div><span class="dpi-gear" aria-label="${r ? 'Modifica' : 'Registra'}">${r ? '⚙️' : '➕'}</span></div>`; }).join('')}</div></div>`).join('')}
+    <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(scPickOp, 50));
+  document.querySelectorAll('#dlgBody [data-scv]').forEach(el => {
+    el.style.cursor = 'pointer';
+    el.onclick = () => { const r = u[el.dataset.scv]; scReg(r ? Object.assign({}, r) : { operatore: nome, voce: el.dataset.scv }, () => scOp(nome)); };
+  });
+}
+function scScadView() {
+  const v = scVicine();
+  openDialog(`
+    <h3>⏰ In scadenza</h3>
+    <p class="note">Scaduti e in scadenza nei prossimi ${SC_FINESTRA} giorni. Ogni lunedì arrivano anche nell'email delle 20.</p>
+    <div class="dpi-list">${v.map(r => `<div class="dpi-it d-${scStato(r)}" data-scid="${esc(r.id)}"><div class="dpi-txt"><b>${esc(r.operatore)} · ${esc(r.voce)}</b>
+      <span>${scTxt(r)} · ${dmyIt(r.scadenza)}</span></div><span class="dpi-gear" aria-label="Rinnova">⚙️</span></div>`).join('') || '<p>Nessuna scadenza vicina. ✓</p>'}</div>
+    <button class="btn ghost" value="back">Indietro</button>`, () => setTimeout(scHome, 50));
+  document.querySelectorAll('#dlgBody [data-scid]').forEach(el => {
+    el.style.cursor = 'pointer';
+    // Toccando una scadenza si registra il rinnovo (nuova data di oggi)
+    el.onclick = () => { const r = scData.righe.find(x => x.id === el.dataset.scid); if (r) scReg({ operatore: r.operatore, voce: r.voce }, scScadView); };
+  });
+}
+function scVociEdit() {
+  const voci = scData.voci;
+  openDialog(`
+    <h3>⚙️ Visite, corsi e durata</h3>
+    <p class="note">Ogni quanti mesi si rinnova ogni voce (0 = nessuna scadenza). I valori iniziali sono indicativi per l'igiene urbana: confermateli con RSPP e medico competente.</p>
+    <div class="plan-people">${voci.map((v, i) => `<div class="pp dpi-row">
+      <label class="dpi-chk"><input type="checkbox" name="a${i}" ${v.attiva ? 'checked' : ''}><span>${esc(v.nome)}<em>${esc(v.cat)}</em></span></label>
+      <label class="ore-in"><input name="m${i}" inputmode="numeric" value="${v.mesi}" aria-label="Mesi ${esc(v.nome)}"> mesi</label></div>`).join('')}</div>
+    <label>Aggiungi una voce<input name="nuovo" maxlength="80" placeholder="es. Spazi confinati"></label>
+    <label>Tipo<select name="cat">${['Formazione', 'Sorveglianza sanitaria', 'Abilitazioni', 'Patenti e CQC'].map(c => `<option>${c}</option>`).join('')}</select></label>
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Annulla</button><button class="btn" value="ok">Salva</button></div>`, (a, fd) => {
+    if (a === 'back') return setTimeout(scHome, 50);
+    const lista = voci.map((v, i) => ({ nome: v.nome, cat: v.cat, mesi: Number(fd.get('m' + i)) || 0, attiva: !!fd.get('a' + i) }));
+    const nuovo = String(fd.get('nuovo') || '').trim();
+    if (nuovo && !lista.some(v => sameName(v.nome, nuovo))) lista.push({ nome: nuovo.charAt(0).toUpperCase() + nuovo.slice(1), cat: String(fd.get('cat') || 'Formazione'), mesi: 12, attiva: true });
+    setTimeout(() => call('scadvoci', { voci: lista }, 'Salvo', out => { scData = out; toast('Salvato ✓'); scHome(); }), 50);
+  });
 }
 
 // ---------- Programma della settimana ----------
@@ -2344,6 +2505,7 @@ function adminHome() {
       <button class="btn ghost" value="report">📊 Report del mese: PDF, stampa, email, condividi</button>
       <button class="btn ghost" value="int">📍 Interventi da assegnare</button>
       <button class="btn ghost" value="dpi">🦺 DPI e vestiario</button>
+      <button class="btn ghost" value="scad">🩺 Visite mediche e corsi</button>
       <button class="btn ghost" value="plan">📅 Programma della settimana</button>
       <button class="btn ghost" value="stats">📈 Statistiche ore per cantiere</button>
       <button class="btn ghost" value="extra">⏱️ Ore extra da autorizzare${adminExtraCount ? ` <span class="badge">${adminExtraCount}</span>` : ''}</button>
@@ -2365,6 +2527,7 @@ function adminHome() {
       plan: () => adminPlan(),
       int: adminInterventi,
       dpi: adminDpi,
+      scad: adminScad,
       shifts: adminShiftsPick,
       extra: () => call('extra', null, 'Carico le richieste', out => adminExtra(out.extra)),
       assenze: () => call('assenze', null, 'Carico ferie e permessi', out => adminAbsences(out.assenze)),

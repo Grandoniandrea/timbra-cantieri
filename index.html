@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-192.png">
-<link rel="stylesheet" href="style.css?v=53">
+<link rel="stylesheet" href="style.css?v=54">
 </head>
 <body>
 <main class="wrap">
@@ -47,7 +47,8 @@
     <div class="sec-head">
       <div><small>ULTIME ATTIVITÀ</small><h2>Timbrature</h2></div>
     </div>
-    <ul class="list" id="log"></ul>
+    <button type="button" class="btn ghost log-toggle" id="btnLog" aria-controls="log">🕘 Le mie timbrature</button>
+    <ul class="list" id="log" hidden></ul>
   </section>
 
   <footer class="foot" id="foot">I dati restano su questo telefono. Fai un backup ogni tanto dal menu ⋯</footer>
@@ -58,6 +59,6 @@
 <div class="toast" id="toast" hidden></div>
 <div id="printArea"></div>
 
-<script src="app.js?v=53"></script>
+<script src="app.js?v=54"></script>
 </body>
 </html>
