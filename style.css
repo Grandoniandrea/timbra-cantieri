@@ -471,3 +471,17 @@ body.demo-on dialog[open] { position: fixed; inset: 10px 0 auto; z-index: 50; ma
 /* Visite e corsi */
 .sc-cat { display: grid; gap: 6px; }
 .sc-cat small { color: var(--muted); }
+
+/* Icone a linea al posto delle emoji */
+.ico { width: 1.2em; height: 1.2em; flex: none; vertical-align: -0.24em; margin-right: .5em;
+  fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.btn .ico { opacity: .9; }
+.btn.ghost .ico, h3 .ico { color: var(--brand); opacity: 1; }
+h3 .ico { width: 1.1em; height: 1.1em; vertical-align: -0.18em; }
+.ico-solo { margin: 0; width: 24px; height: 24px; vertical-align: middle; }
+.dpi-gear .ico-solo { color: var(--ink); width: 26px; height: 26px; }
+.icon-btn .ico-solo { width: 20px; height: 20px; }
+.btn:has(> .ico) { display: inline-flex; align-items: center; justify-content: center; gap: .55em; }
+.btn:has(> .ico) > .ico { margin-right: 0; }
+dialog .btn:has(> .ico) { display: flex; justify-content: flex-start; text-align: left; }
+.log-toggle:has(> .ico) { display: flex; width: 100%; }
