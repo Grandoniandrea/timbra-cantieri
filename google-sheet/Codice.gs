@@ -280,9 +280,16 @@ function salvaCantieri_(lista) {
     righe.push([nome, c.attivo === false ? 'NO' : 'SI', coloreValido_(c.colore)]);
   });
   const sh = foglioCantieri_();
-  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 3).clearContent().setBackground(null);
+  // Il committente (colonna E) segue il nome del cantiere, non la riga: così cancellare o spostare un cantiere non lo mescola
+  let comm = {};
+  try { comm = committenti_(); } catch (e) { comm = {}; }
+  if (sh.getLastRow() > 1) {
+    sh.getRange(2, 1, sh.getLastRow() - 1, 3).clearContent().setBackground(null);
+    sh.getRange(2, 5, sh.getLastRow() - 1, 1).clearContent();
+  }
   if (righe.length) {
     sh.getRange(2, 1, righe.length, 3).setValues(righe);
+    sh.getRange(2, 5, righe.length, 1).setValues(righe.map(r => [comm[r[0]] || '']));
     // Colora la cella così il colore si vede anche nel foglio
     sh.getRange(2, 3, righe.length, 1).setBackgrounds(righe.map(r => [r[2] || null]));
   }

@@ -112,3 +112,7 @@ Oltre alla sede GE3CO si può timbrare anche agli impianti dei committenti, entr
 - Ecoacciai, Via Raffaele Mattioli 1, Pontedera
 
 Nello script sono nella lista `IMPIANTI` in cima a `fuoriSede_`. Per spostare un punto o allargare il raggio, cambia lì i numeri e ripubblica il deployment. Finché lo script non è aggiornato, le timbrature fatte agli impianti arrivano nel foglio segnate FUORI SEDE.
+
+## Aggiornamento: committente legato al nome del cantiere
+
+Quando dall'app si salva l'elenco cantieri, la colonna E "Committente" ora segue il nome del cantiere e non il numero di riga. Così, se si cancella o si sposta un cantiere, Ecofor Service ed Ecoacciai non perdono il loro committente. Serve ripubblicare lo script.
