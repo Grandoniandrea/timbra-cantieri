@@ -6,7 +6,7 @@
   "scripts": {
     "copy": "node copy-web.js",
     "android": "node copy-web.js && npx cap sync android",
-    "ios": "node copy-web.js && npx cap sync ios"
+    "ios": "node copy-web.js && node patch-ios.js"
   },
   "dependencies": {
     "@capacitor/android": "6.2.0",
