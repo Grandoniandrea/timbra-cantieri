@@ -586,3 +586,4 @@ dialog .btn:has(> .ico) { display: flex; justify-content: flex-start; text-align
 .sc-cat { gap: 8px; margin-top: 4px; }
 .sc-cat small { font-size: 11px; letter-spacing: .1em; }
 .dpi-red { color: var(--st-over) !important; }
+.ferie-hint { display: block; font-size: 12px; font-weight: 400; margin-top: 4px; }

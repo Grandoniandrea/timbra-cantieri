@@ -51,7 +51,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 61;
+const APP_VERSION = 62;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -1736,6 +1736,8 @@ function planFerieEdit(d) {
   const tipoDi = nome => (planSquads.find(x => x.data === d && isAss(x.turno) && x.operatori.some(o => sameName(o, nome))) || {}).turno || '';
   const occupato = nome => planSquads.some(x => x.data === d && !isAss(x.turno) && x.operatori.some(o => sameName(o, nome)));
   const people = planPeople.filter(p => p.attivo !== false || tipoDi(p.nome));
+  // Giorni da quello scelto fino alla fine della settimana del programma
+  const fineSett = [0, 1, 2, 3, 4, 5, 6].map(i => addDays(planWeek, i)).filter(x => x >= d);
   openDialog(`
     <h3>🌴 Ferie, malattia, permesso</h3>
     <p class="note">${esc(dayLabel(d))} · ogni assenza conta ${cfg().oreTurno} ore</p>
@@ -1746,16 +1748,33 @@ function planFerieEdit(d) {
       return `<div class="pp pp-ore"><span><b>${esc(p.nome)}</b> <em class="${diff > 0 ? 'dop' : ''}">${x.lavoro + x.ferie}/${oreContratto(p.nome)} h${diff < 0 ? ` · mancano ${-diff}` : diff > 0 ? ` · ${diff} oltre` : ''}${occupato(p.nome) ? ' · in squadra quel giorno' : ''}</em></span>
         <select name="as${i}" aria-label="Assenza di ${esc(p.nome)}"><option value="">—</option>${ASSENZE.map(a => `<option value="${a.nome}" ${cur === a.nome ? 'selected' : ''}>${a.icona} ${a.nome}</option>`).join('')}</select></div>`;
     }).join('') || '<p class="note">Nessun operatore.</p>'}</div>
+    ${fineSett.length > 1 ? `<label>Vale per<select name="fino">${fineSett.map((x, k) => `<option value="${x}">${k ? `fino a ${esc(dayLabel(x))} (${k + 1} giorni)` : 'solo questo giorno'}</option>`).join('')}</select>
+      <span class="note ferie-hint">Per più giorni si applica a chi hai cambiato qui; gli altri restano come sono.</span></label>` : ''}
     <div class="row"><button class="btn ghost" value="cancel" formnovalidate>Annulla</button><button class="btn" value="ok">OK</button></div>`, (a, fd) => {
     if (a !== 'ok') return setTimeout(planView, 50);
-    const vecchi = planSquads.filter(x => x.data === d && isAss(x.turno));
-    planSquads = planSquads.filter(x => !(x.data === d && isAss(x.turno)));
-    ASSENZE.forEach(as => {
-      const ops = people.filter((p, i) => fd.get('as' + i) === as.nome).map(p => p.nome);
-      const prima = vecchi.find(x => x.turno === as.nome);
-      if (ops.length) planSquads.push({ id: prima ? prima.id : uid(), data: d, turno: as.nome, cantiere: as.nome.toUpperCase(), operatori: ops, nota: '' });
+    const scelta = {};
+    people.forEach((p, i) => { scelta[p.nome] = String(fd.get('as' + i) || ''); });
+    // Il giorno toccato prende la scelta di tutti; i giorni successivi solo per chi è stato cambiato
+    const cambiati = people.filter(p => scelta[p.nome] !== tipoDi(p.nome)).map(p => p.nome);
+    const fino = String(fd.get('fino') || d);
+    const giorni = fineSett.filter(x => x <= fino);
+    giorni.forEach((g, k) => {
+      const tipoG = nome => (planSquads.find(x => x.data === g && isAss(x.turno) && x.operatori.some(o => sameName(o, nome))) || {}).turno || '';
+      const nuovo = {};
+      people.forEach(p => { nuovo[p.nome] = k === 0 || cambiati.includes(p.nome) ? scelta[p.nome] : tipoG(p.nome); });
+      const vecchi = planSquads.filter(x => x.data === g && isAss(x.turno));
+      // chi non è in elenco (operatore disattivato) resta com'era
+      const fuori = vecchi.map(x => ({ turno: x.turno, ops: x.operatori.filter(o => !people.some(p => sameName(p.nome, o))) }));
+      planSquads = planSquads.filter(x => !(x.data === g && isAss(x.turno)));
+      ASSENZE.forEach(as => {
+        const ops = people.filter(p => nuovo[p.nome] === as.nome).map(p => p.nome)
+          .concat((fuori.find(f => f.turno === as.nome) || { ops: [] }).ops);
+        const prima = vecchi.find(x => x.turno === as.nome);
+        if (ops.length) planSquads.push({ id: prima ? prima.id : uid(), data: g, turno: as.nome, cantiere: as.nome.toUpperCase(), operatori: ops, nota: '' });
+      });
     });
     planDirty = true;
+    if (giorni.length > 1 && cambiati.length) toast(`Applicato a ${giorni.length} giorni`);
     setTimeout(planView, 50);
   });
 }
