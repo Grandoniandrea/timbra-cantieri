@@ -51,7 +51,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 58;
+const APP_VERSION = 59;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -2443,16 +2443,24 @@ const monthInput = () => `<label>Mese<input type="month" name="mese" value="${ad
 function busy(text) { openDialog(`<h3>${esc(text)}</h3><p>Un attimo…</p><button class="btn ghost" value="">Chiudi</button>`); }
 // Una richiesta allo script che non risponde entro 30 secondi viene considerata fallita
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+// Perché una richiesta al registro non è andata: rete assente, registro lento o risposta non valida
+function motivoRete(e, azione) {
+  if (e && e.message === 'timeout') return 'Il registro non ha risposto entro 30 secondi. Riprova tra poco.';
+  if (navigator.onLine === false) return 'Serve la connessione internet.';
+  if (e && e.name === 'SyntaxError') return `Il registro ha risposto in modo strano (${azione}): di solito si sistema riprovando tra un minuto. Se resta, lo script Google va ripubblicato.`;
+  return `Il registro non è raggiungibile (${azione}: ${e && e.message || e}). Controlla la connessione e riprova.`;
+}
 function fail(msg) { openDialog(`<h3>Errore</h3><p>${esc(msg)}</p><button class="btn" value="back">Indietro</button>`, () => setTimeout(adminHome, 50)); }
 function call(azione, extra, waitText, onOk) {
   busy(waitText);
   withTimeout(adminCall(azione, extra), 30000).then(out => {
-    if (out.ok) onOk(out);
+    if (out.ok) {
+      // Un errore della schermata non è un problema di connessione: lo diciamo con il suo nome
+      try { onOk(out); } catch (e) { console.error(e); fail(`La schermata non si è aperta (${azione}): ${e && e.message || e}. Manda questo messaggio a chi gestisce l'app.`); }
+    }
     else if (out.error === 'password' || out.error === 'bloccato') { adminPwd = null; setTimeout(() => adminLogin(out.msg), 50); }
-    else fail(out.msg || 'Qualcosa non ha funzionato.');
-  }).catch(e => fail(e && e.message === 'timeout'
-    ? 'Il registro non ha risposto. Controlla la connessione e riprova.'
-    : 'Serve la connessione internet.'));
+    else fail(out.msg || (out.error ? `Il registro ha dato un errore (${azione}): ${out.error}` : 'Qualcosa non ha funzionato.'));
+  }, e => fail(motivoRete(e, azione)));
 }
 
 function adminLogin(msg) {
@@ -2473,7 +2481,7 @@ function adminLogin(msg) {
         }
         else if (out.error === 'nopass') { adminPwd = null; adminCreatePassword(); }
         else { adminPwd = null; adminLogin(out.msg || 'Errore.'); }
-      }).catch(() => { adminPwd = null; adminLogin('Serve la connessione internet.'); });
+      }).catch(e => { adminPwd = null; adminLogin(motivoRete(e, 'accesso')); });
     });
 }
 
