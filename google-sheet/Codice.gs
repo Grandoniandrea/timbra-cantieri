@@ -15,6 +15,17 @@ const EMAIL_RESPONSABILE = '';
 // Turno standard: ogni servizio (ingombranti) vale ORE_TURNO ore fisse.
 // Oltre ORE_TURNO + TOLLERANZA_MIN il dipendente deve giustificare: l'extra conta solo se autorizzato.
 const ORE_TURNO = 5;
+// Committenti con turni diversi dai 5 ore di Geofor: ore del turno e durata in minuti (oltre la quale scatta l'extra)
+const TURNI_COMMITTENTE = { 'ECOFOR SERVICE': { ore: 8, minuti: 510 }, 'ECOACCIAI': { ore: 8, minuti: 480 } };
+function committenteDi_(cantiere) {
+  const n = String(cantiere || '').toUpperCase();
+  try { const m = committenti_()[n]; if (m) return m; } catch (e) { /* scheda non ancora creata */ }
+  if (n.indexOf('ECOFOR') >= 0) return 'ECOFOR SERVICE';
+  if (n.indexOf('ECOACCIAI') >= 0 || n.indexOf('ECO ACCIAI') >= 0) return 'ECOACCIAI';
+  return 'GEOFOR';
+}
+const oreTurnoDi_ = cantiere => (TURNI_COMMITTENTE[committenteDi_(cantiere)] || {}).ore || ORE_TURNO;
+const minutiTurnoDi_ = cantiere => (TURNI_COMMITTENTE[committenteDi_(cantiere)] || {}).minuti || ORE_TURNO * 60;
 const TOLLERANZA_MIN = 15;
 // Fasce orarie dei turni (ora di inizio della timbratura -> fascia)
 const TURNI = [
@@ -342,7 +353,8 @@ function upsert_(s, user) {
 
   // Ore extra oltre il turno standard
   const minuti = s.end ? Math.round((s.end - s.start) / 60000) : 0;
-  const extraMin = minuti > ORE_TURNO * 60 + TOLLERANZA_MIN ? minuti - ORE_TURNO * 60 : 0;
+  const lim = minutiTurnoDi_(s.site);
+  const extraMin = minuti > lim + TOLLERANZA_MIN ? minuti - lim : 0;
   const motivo = (s.extra && s.extra.motivo) || (prima && prima[COL_MOTIVO - 1]) || '';
   const nota = (s.extra && s.extra.nota) || (prima && prima[COL_NOTA - 1]) || '';
   let statoExtra = '';
@@ -517,9 +529,10 @@ function creaRiepilogo_(anno, mese) {
   dati.forEach(r => {
     const dip = r[1], giorno = r[2], cantiere = r[3], stato = r[7];
     if (!(giorno instanceof Date) || giorno < da || giorno >= a || diProva_(r)) return;
-    const p = perDip[dip] || (perDip[dip] = { turni: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0, mattine: 0, pomeriggi: 0 });
+    const p = perDip[dip] || (perDip[dip] = { turni: 0, ore: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0, mattine: 0, pomeriggi: 0 });
     if (stato !== 'Chiuso') { p.aperti++; return; }
     p.turni++;
+    p.ore += oreTurnoDi_(cantiere);
     const fascia = r[COL_TURNO - 1] || (r[4] instanceof Date ? turno_(r[4]) : '');
     if (fascia === TURNI[0].nome) p.mattine++; else if (fascia === TURNI[1].nome) p.pomeriggi++;
     p.giorni.add(giorno.getTime());
@@ -535,15 +548,15 @@ function creaRiepilogo_(anno, mese) {
   const listaCantieri = Array.from(cantieri).sort();
   // Assenze approvate nel mese
   const ass = assenzeMese_(anno, mese);
-  Object.keys(ass).forEach(n => { if (!perDip[n]) perDip[n] = { turni: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0, mattine: 0, pomeriggi: 0 }; });
+  Object.keys(ass).forEach(n => { if (!perDip[n]) perDip[n] = { turni: 0, ore: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0, mattine: 0, pomeriggi: 0 }; });
   const nomiTutti = Object.keys(perDip).sort();
-  const intest = ['Dipendente', 'Giorni', 'Turni', 'Ore turni (' + ORE_TURNO + 'h)', 'Extra autorizzati', 'TOTALE ORE',
+  const intest = ['Dipendente', 'Giorni', 'Turni', 'Ore turni', 'Extra autorizzati', 'TOTALE ORE',
     'Extra da autorizzare', 'Extra non autorizzati', 'Turni non chiusi', 'Giorni ferie', 'Ore permesso', 'Giorni malattia',
     'Turni mattina', 'Turni pomeriggio']
     .concat(listaCantieri.map(c => c + ' (turni)'));
   const righe = nomiTutti.map(n => {
     const p = perDip[n], a = ass[n] || { ferie: 0, permesso: 0, malattia: 0 };
-    const base = p.turni * ORE_TURNO;
+    const base = p.ore;
     return [n, p.giorni.size, p.turni, base, round2_(p.extraOk), round2_(base + p.extraOk),
       round2_(p.extraAttesa), round2_(p.extraNo), p.aperti, a.ferie, round2_(a.permesso), a.malattia, p.mattine, p.pomeriggi]
       .concat(listaCantieri.map(c => p.cantieri[c] || 0));
@@ -593,9 +606,9 @@ function creaComuni_(anno, mese) {
     c.operatori.add(dip);
     if (r[COL_STATO_EXTRA - 1] === EXTRA_OK) c.extra += Number(r[COL_EXTRA - 1]) || 0;
   });
-  const intest = ['Comune / cantiere', 'Giorni di servizio', 'Servizi (turni)', 'Ore turni (' + ORE_TURNO + 'h)', 'Extra autorizzati', 'TOTALE ORE', 'Operatori'];
+  const intest = ['Comune / cantiere', 'Giorni di servizio', 'Servizi (turni)', 'Ore turni', 'Extra autorizzati', 'TOTALE ORE', 'Operatori'];
   const righe = Object.keys(per).sort().map(n => {
-    const c = per[n], base = c.servizi * ORE_TURNO;
+    const c = per[n], base = c.servizi * oreTurnoDi_(n);
     return [n, c.giorni.size, c.servizi, base, round2_(c.extra), round2_(base + c.extra), Array.from(c.operatori).sort().join(', ')];
   });
   const somma = i => round2_(righe.reduce((t, r) => t + (Number(r[i]) || 0), 0));
@@ -756,7 +769,7 @@ function inviaRiepilogo_(anno, mese) {
     subject: 'GE3CO – Ore del personale – ' + r.nomeMese,
     htmlBody: '<p>Riepilogo ore del personale di <b>' + r.nomeMese + '</b>.</p>' + tabella +
       '<p>Dettaglio di tutte le timbrature: <a href="' + link + '">apri il Google Sheet</a></p>' +
-      '<p>Ogni turno vale ' + ORE_TURNO + ' ore; le ore extra contano solo se autorizzate.</p>' +
+      '<p>Ogni turno vale ' + ORE_TURNO + ' ore (Ecofor Service ed Ecoacciai 8 ore); le ore extra contano solo se autorizzate.</p>' +
       (r.righe.some(x => x[8] > 0) ? '<p><b>Attenzione:</b> alcuni turni risultano non chiusi (uscita mancante).</p>' : '') +
       (r.righe.some(x => x[6] > 0) ? '<p><b>Attenzione:</b> ci sono ore extra ancora da autorizzare.</p>' : ''),
     attachments: [xlsx, xlsxC],
@@ -824,8 +837,10 @@ function avvisiImmediati(soloSegna) {
       aggiungi(id + '|f', 'Timbratura fuori sede', dip, cant + ' · entrata ' + f(ent) + ' · ' + sede);
     }
     if (sede.indexOf('PROVA') === 0) return; // prove del responsabile: nessun avviso
-    if (r[7] === 'In corso' && ora - ent.getTime() > ORE_USCITA_DIMENTICATA * 36e5) {
-      aggiungi(id + '|u', 'Uscita non timbrata', dip, cant + ' · entrata ' + f(ent) + ' · nessuna uscita dopo ' + ORE_USCITA_DIMENTICATA + ' ore');
+    // Uscita dimenticata: un'ora dopo la fine del turno di quel cantiere (Geofor 6 ore, Ecofor 9 ore e mezza, Ecoacciai 9 ore)
+    const oreLimite = minutiTurnoDi_(cant) / 60 + 1;
+    if (r[7] === 'In corso' && ora - ent.getTime() > oreLimite * 36e5) {
+      aggiungi(id + '|u', 'Uscita non timbrata', dip, cant + ' · entrata ' + f(ent) + ' · nessuna uscita dopo ' + String(oreLimite).replace('.', ',') + ' ore');
     }
     if (r[COL_STATO_EXTRA - 1] === EXTRA_ATTESA) {
       const extra = String(r[COL_EXTRA - 1]).replace('.', ',');

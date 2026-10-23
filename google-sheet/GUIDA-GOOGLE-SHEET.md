@@ -97,3 +97,9 @@ Schede "Scadenze Voci" (visite, corsi, abilitazioni e ogni quanti mesi si rinnov
 Ogni lunedì l'avviso delle 20 aggiunge le voci scadute o in scadenza nei 60 giorni.
 Le durate iniziali sono indicative per l'igiene urbana: vanno confermate con RSPP e medico competente.
 Si installa con il file completo `Codice.gs` e una nuova versione del deployment.
+
+## Aggiornamento: turni di Ecofor Service ed Ecoacciai
+In `Codice.gs`, `TURNI_COMMITTENTE`: Ecofor Service turno 07:00–15:30 (vale 8 ore, extra oltre le 8 ore e mezza),
+Ecoacciai turno di 8 ore dalle 08:00. Riepiloghi, extra e avviso di uscita dimenticata usano le ore del cantiere.
+Gli operatori fissi si impostano nella scheda Operatori, colonna "Cantiere fisso"
+(Abenaim → ECOFOR SERVICE; Lupi e Gora → ECOACCIAI).

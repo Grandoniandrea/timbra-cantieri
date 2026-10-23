@@ -3,11 +3,15 @@
 // ---------- Dati ----------
 const KEY = 'timbra-cantieri.v1';
 // Committenti: ogni cantiere appartiene a uno di loro (dal foglio Cantieri, oppure dal nome)
+// turno: ore che vale un turno e orario di servizio (null = turni Geofor 06–11 / 13–18 da 5 ore)
 const CLIENTI = [
-  { id: 'GEOFOR', nome: 'Geofor', logo: 'logo-geofor.png' },
-  { id: 'ECOFOR SERVICE', nome: 'Ecofor Service', logo: 'logo-ecofor.png' },
-  { id: 'ECOACCIAI', nome: 'Ecoacciai', logo: 'logo-ecoacciai.png' },
+  { id: 'GEOFOR', nome: 'Geofor', logo: 'logo-geofor.png', turno: null },
+  { id: 'ECOFOR SERVICE', nome: 'Ecofor Service', logo: 'logo-ecofor.png', turno: { ore: 8, inizio: '07:00', fine: '15:30', giorni: 'lunedì–venerdì' } },
+  { id: 'ECOACCIAI', nome: 'Ecoacciai', logo: 'logo-ecoacciai.png', turno: { ore: 8, inizio: '08:00', fine: '16:00', giorni: '' } },
 ];
+const turnoCliente = nome => (CLIENTI.find(c => c.id === committenteDi(nome)) || {}).turno || null;
+// Ore che vale un turno su quel cantiere
+const oreTurnoDi = nome => (turnoCliente(nome) || {}).ore || cfg().oreTurno;
 function committenteDi(nome) {
   const n = String(nome || '').toUpperCase();
   const m = (db && db.committenti && db.committenti[n]) || '';
@@ -43,7 +47,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 55;
+const APP_VERSION = 56;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -198,16 +202,17 @@ function render() {
       <div class="bar"><span id="bar"></span></div>
       <p id="left"></p>
       <p class="gps">${posLabel(db.active.posIn)}${db.active.posIn && !db.active.posIn.errore && cfg().sede ? ' · in sede' : ''}</p>
-      <p>${esc(fasciaLabel(db.active.start))} · entrata alle ${fmtTime(db.active.start)} · fine prevista alle ${fmtTime(db.active.start + cfg().oreTurno * 3600000)}</p>
+      <p>${esc(turnoCliente(site.name) ? `Turno ${turnoCliente(site.name).inizio}–${turnoCliente(site.name).fine}` : fasciaLabel(db.active.start))} · entrata alle ${fmtTime(db.active.start)} · fine prevista alle ${fmtTime(db.active.start + durataTurnoMin(site.name) * 60000)}</p>
       <button class="btn big danger" id="btnOut">Timbra uscita</button>`;
     const tick = () => {
       const el = $('#timer'); if (!el || !db.active) return;
-      const done = Date.now() - db.active.start, tot = cfg().oreTurno * 3600000;
+      const nomeT = siteById(db.active.siteId).name, oreT = oreTurnoDi(nomeT), conOrario = !!turnoCliente(nomeT);
+      const done = Date.now() - db.active.start, tot = durataTurnoMin(nomeT) * 60000;
       el.textContent = fmtClock(done);
       $('#bar').style.width = Math.min(100, done / tot * 100) + '%';
       $('#bar').classList.toggle('over', done > tot);
-      $('#left').textContent = done < tot ? `Mancano ${fmtDur(tot - done)} alle ${cfg().oreTurno} ore`
-        : `${cfg().oreTurno} ore completate · ${fmtDur(done - tot)} in più`;
+      $('#left').textContent = done < tot ? `Mancano ${fmtDur(tot - done)} ${conOrario ? 'alla fine del turno' : `alle ${oreT} ore`}`
+        : `${conOrario ? 'Turno completato' : `${oreT} ore completate`} · ${fmtDur(done - tot)} in più`;
       document.title = `⏱ ${fmtClock(done)} · Timbra Cantieri`;
     };
     tick(); timer = setInterval(tick, 1000);
@@ -1490,7 +1495,7 @@ function oreSettimana(squadre) {
   squadre.forEach(s => s.operatori.forEach(o => {
     const k = o.trim().toLowerCase();
     const x = m[k] || (m[k] = { nome: o, lavoro: 0, ferie: 0 });
-    if (isAss(s.turno)) x.ferie += cfg().oreTurno; else x.lavoro += cfg().oreTurno;
+    if (isAss(s.turno)) x.ferie += cfg().oreTurno; else x.lavoro += oreTurnoDi(s.cantiere);
   }));
   return m;
 }
@@ -1864,8 +1869,9 @@ function modDoc(week) {
   const pagine = [];
   for (let i = 0; i < Math.max(1, blocks.length); i += MOD_BLOCCHI) pagine.push(blocks.slice(i, i + MOD_BLOCCHI));
   // Ore di cantiere fisse: ogni turno vale oreTurno ore, con l'orario di servizio del turno (06–11 o 13–18)
-  const ore = cfg().oreTurno;
   const orari = s => {
+    const nome = siteById(s.siteId).name, t = turnoCliente(nome), ore = oreTurnoDi(nome);
+    if (t) return { in: t.inizio, out: t.fine, tot: hm(ore * 3600000) };
     const pom = (fascia(s.start) || {}).nome === 'Pomeriggio' || new Date(s.start).getHours() >= 12;
     const h0 = pom ? 13 : 6;
     return { in: `${pad(h0)}:00`, out: `${pad(h0 + Math.floor(ore))}:${pad(Math.round((ore % 1) * 60))}`, tot: hm(ore * 3600000) };
@@ -1897,7 +1903,7 @@ function modDoc(week) {
       Il lavoratore sarà chiamato a rispondere in caso di anomalia tra quanto da esso dichiarato e quanto previsto dagli ordini di servizio. La ripetizione di eventuali abusi sarà punita conformemente a quanto prevede il nostro CCNL.</p>
     </div>
   </div>`;
-  const tot = shifts.length * cfg().oreTurno * 3600000;
+  const tot = shifts.reduce((t, x) => t + oreTurnoDi(siteById(x.siteId).name) * 3600000, 0);
   return { html: pagine.map(one).join('<div class="mod-cut"></div>'), turni: shifts.length, tot, moduli: pagine.length, prove: shifts.filter(s => s.demo).length };
 }
 // Crea il PDF del modulo sul telefono e lo condivide (WhatsApp, email…) al responsabile
@@ -2277,10 +2283,15 @@ function fascia(t) {
 const fasciaLabel = t => { const f = fascia(t); return f ? `Turno ${f.nome.toLowerCase()} (${f.inizio}–${f.fine})` : 'Turno fuori orario'; };
 
 // Minuti oltre il turno standard (0 se entro la tolleranza)
+function durataTurnoMin(siteName) {
+  const t = turnoCliente(siteName);
+  if (t && t.inizio && t.fine) { const m = x => Number(x.slice(0, 2)) * 60 + Number(x.slice(3, 5)); return m(t.fine) - m(t.inizio); }
+  return oreTurnoDi(siteName) * 60;
+}
 function extraMin(s) {
   if (!s.end) return 0;
-  const c = cfg(), min = Math.round((s.end - s.start) / 60000);
-  return min > c.oreTurno * 60 + c.tolleranzaMin ? min - c.oreTurno * 60 : 0;
+  const c = cfg(), min = Math.round((s.end - s.start) / 60000), lim = durataTurnoMin(siteById(s.siteId).name);
+  return min > lim + c.tolleranzaMin ? min - lim : 0;
 }
 function afterClockOut(shift, viaNfc) {
   if (extraMin(shift)) return setTimeout(() => justifyExtra(shift), 50);
@@ -2292,7 +2303,7 @@ function justifyExtra(shift, msg) {
   $('#toast').hidden = true;
   const c = cfg();
   openDialog(`
-    <h3>⏱️ Turno oltre le ${c.oreTurno} ore</h3>
+    <h3>⏱️ Turno oltre l'orario</h3>
     <p>${esc(siteById(shift.siteId).name)} · ${fmtTime(shift.start)} → ${fmtTime(shift.end)} = <b>${fmtDur(shift.end - shift.start)}</b>
       (${fmtDur(extraMin(shift) * 60000)} in più). Le ore extra vanno giustificate e autorizzate${c.autorizzaNome ? ' da ' + esc(c.autorizzaNome) : ''}.</p>
     ${msg ? `<p class="err">${esc(msg)}</p>` : ''}
@@ -2735,13 +2746,12 @@ function adminStatsPick() {
     });
 }
 function statsFor(filter) {
-  const ore = cfg().oreTurno;
   const by = {};
   statsShifts.filter(t => (!filter || t.dip === filter) && t.end && !/^PROVA/.test(t.sede || '')).forEach(t => {
     const k = t.cantiere || '—';
     const x = by[k] || (by[k] = { nome: k, turni: 0, ore: 0, extra: 0, operatori: new Set() });
     x.turni++;
-    x.ore += ore;
+    x.ore += oreTurnoDi(k);
     if (t.extra && t.statoExtra === 'Autorizzato') { x.ore += t.extra; x.extra += t.extra; }
     x.operatori.add(t.dip);
   });
