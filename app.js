@@ -1570,7 +1570,42 @@ function adminPlan(week) {
     planSquads = out.squadre; planPeople = out.operatori || []; planSites = (out.cantieri || []).filter(c => c.attivo !== false);
     planDirty = false;
     planView();
+    planMeseLoad();
   });
+}
+// ---- Ore del mese fino a oggi (timbrature vere + assenze del programma), per capire chi ha ore da recuperare ----
+let planMese = null;
+// "Colombo" del programma = "Luca Colombo" delle timbrature (stesse parole, in qualsiasi ordine)
+function stessoOperatore(a, b) {
+  const x = String(a).trim().toLowerCase().split(/\s+/), y = String(b).trim().toLowerCase().split(/\s+/);
+  return x.every(w => y.includes(w)) || y.every(w => x.includes(w));
+}
+async function planMeseLoad() {
+  const oggi = new Date(), chiave = isoDay(oggi);
+  if (planMese && planMese.chiave === chiave && Date.now() - planMese.at < 10 * 60000) return;
+  try {
+    const da = isoDay(new Date(oggi.getFullYear(), oggi.getMonth(), 1));
+    const [t, p] = await Promise.all([
+      withTimeout(adminCall('timbrature', { anno: oggi.getFullYear(), mese: oggi.getMonth() }), 30000),
+      withTimeout(adminCall('programma', { da, a: chiave }), 30000)]);
+    if (!t || !t.ok) return;
+    planMese = { chiave, at: Date.now(), giorni: oggi.getDate(), meseNome: oggi.toLocaleDateString('it-IT', { month: 'long' }),
+      turni: (t.timbrature || []).filter(x => x.end && x.start <= oggi.getTime() && !/^PROVA/.test(x.sede || '')),
+      ass: p && p.ok ? (p.squadre || []).filter(q => isAss(q.turno) && q.data <= chiave) : [] };
+    const box = document.getElementById('oreBox');
+    if (box) box.outerHTML = planHoursBox();
+  } catch (e) { /* senza rete lo specchietto resta solo settimanale */ }
+}
+function oreMeseDi(nome) {
+  if (!planMese) return null;
+  let fatte = 0, ass = 0;
+  planMese.turni.filter(t => stessoOperatore(nome, t.dip)).forEach(t => {
+    fatte += oreTurnoDi(t.cantiere);
+    if (t.extra && t.statoExtra === 'Autorizzato') fatte += Number(t.extra) || 0;
+  });
+  planMese.ass.forEach(q => { if (q.operatori.some(o => stessoOperatore(nome, o))) ass += cfg().oreTurno; });
+  const attese = Math.round(oreContratto(nome) * planMese.giorni / 7);
+  return { fatte, ass, tot: fatte + ass, attese, saldo: Math.round((fatte + ass - attese) * 10) / 10 };
 }
 function planView() {
   const isD = doppi(planSquads);
@@ -1726,8 +1761,13 @@ function planHoursBox() {
         <div class="oh-bar"><span style="width:${Math.min(100, r.max ? r.tot / r.max * 100 : 0)}%"></span></div>
         <span class="oh-diff">${r.diff > 0 ? `+${fmtH(r.diff)} h` : r.diff < 0 ? `−${fmtH(-r.diff)} h` : 'in regola'}</span>
       </div>
+      ${(m => m ? `<div class="oh-mese">
+        <span>${esc(planMese.meseNome)} a oggi: <b>${fmtH(m.tot)}</b> / ${fmtH(m.attese)} h${m.ass ? ` <small>(di cui ${fmtH(m.ass)} h assenze)</small>` : ''}</span>
+        ${m.saldo < 0 ? `<i class="oh-rec">da recuperare ${fmtH(-m.saldo)} h</i>` : m.saldo > 0 ? `<i class="oh-piu">+${fmtH(m.saldo)} h</i>` : '<i class="oh-pari">in pari</i>'}
+      </div>` : '')(oreMeseDi(r.nome))}
     </div>`).join('')}</div>
-    <p class="note">Ogni turno conta le ore del suo cantiere (Geofor ${cfg().oreTurno} h, Ecofor Service ed Ecoacciai 8 h); ferie, malattia e permesso contano ${cfg().oreTurno} h. Le ore da contratto si cambiano in Operatori.</p>
+    ${planMese ? '' : '<p class="note oh-carico">Carico le ore del mese…</p>'}
+    <p class="note">Mese a oggi: timbrature fatte (con gli extra autorizzati) + assenze del programma, confrontate con le ore da contratto fino a oggi. Chi ha ore da recuperare può coprire le assenze.<br>Ogni turno conta le ore del suo cantiere (Geofor ${cfg().oreTurno} h, Ecofor Service ed Ecoacciai 8 h); ferie, malattia e permesso contano ${cfg().oreTurno} h. Le ore da contratto si cambiano in Operatori.</p>
   </details>`;
 }
 let planHoursOpen = true;
