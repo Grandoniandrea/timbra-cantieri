@@ -41,9 +41,30 @@ const SEDE_PREDEFINITA = { nome: 'Sede GE3CO – Via G. Ferraris 7, Pisa', lat: 
 
 const FOGLIO_TIMBRATURE = 'Timbrature';
 const INTESTAZIONE = ['ID', 'Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Ore', 'Stato', 'Telefono', 'Aggiornato',
-  'Extra (ore)', 'Motivo extra', 'Nota extra', 'Stato extra', 'Posizione entrata', 'Posizione uscita', 'Turno', 'Controllo sede'];
+  'Extra (ore)', 'Motivo extra', 'Nota extra', 'Stato extra', 'Posizione entrata', 'Posizione uscita', 'Turno', 'Controllo sede',
+  'Ritardo (min)', 'Minuti tolti'];
 // Indici (base 1) delle colonne extra e posizione
 const COL_EXTRA = 11, COL_MOTIVO = 12, COL_NOTA = 13, COL_STATO_EXTRA = 14, COL_POS_IN = 15, COL_POS_OUT = 16, COL_TURNO = 17, COL_SEDE = 18;
+const COL_RITARDO = 19, COL_TOLTI = 20;
+// ---------- Orari di entrata ----------
+// Inizio e fine dei turni per committente, in minuti dalla mezzanotte.
+// Si timbra al massimo 10 minuti prima; fino a 15 minuti di ritardo non si perde niente,
+// oltre si tolgono i minuti arrotondati al quarto d'ora successivo (es. 20 min di ritardo = 30 min tolti).
+// Uscire dopo l'orario non dà straordinario: il turno vale sempre le sue ore fisse.
+const ORARI_TURNO = { 'GEOFOR': [[360, 660], [780, 1080]], 'ECOFOR SERVICE': [[420, 930]], 'ECOACCIAI': [[480, 960]] };
+const ANTICIPO_MIN = 10, TOLLERANZA_RITARDO_MIN = 15;
+const REGOLE_ORARIO_DAL = new Date(2026, 9, 24); // le timbrature precedenti restano come erano
+function ritardo_(start, cantiere) {
+  const d = new Date(start), m = d.getHours() * 60 + d.getMinutes();
+  if (d < REGOLE_ORARIO_DAL) return { ritardo: 0, tolti: 0 };
+  const turni = ORARI_TURNO[committenteDi_(cantiere)] || ORARI_TURNO.GEOFOR;
+  let rif = null;
+  turni.forEach(x => { if (m >= x[0] - ANTICIPO_MIN) rif = x; });
+  if (!rif) return { ritardo: 0, tolti: 0 };
+  const ritardo = Math.max(0, m - rif[0]);
+  const tolti = ritardo > TOLLERANZA_RITARDO_MIN ? Math.min(Math.ceil(ritardo / 15) * 15, minutiTurnoDi_(cantiere)) : 0;
+  return { ritardo, tolti };
+}
 
 // Assenze (ferie, permessi, malattia)
 const FOGLIO_ASSENZE = 'Assenze';
@@ -247,7 +268,8 @@ function timbratureMese_(anno, mese) {
       start: r[4].getTime(), end: r[5] instanceof Date ? r[5].getTime() : null,
       extra: Number(r[COL_EXTRA - 1]) || 0, statoExtra: String(r[COL_STATO_EXTRA - 1] || ''),
       posIn: String(r[COL_POS_IN - 1] || ''), posOut: String(r[COL_POS_OUT - 1] || ''),
-      turno: String(r[COL_TURNO - 1] || turno_(r[4])), sede: String(r[COL_SEDE - 1] || '') }))
+      turno: String(r[COL_TURNO - 1] || turno_(r[4])), sede: String(r[COL_SEDE - 1] || ''),
+      ritardo: Number(r[COL_RITARDO - 1]) || 0, tolti: Number(r[COL_TOLTI - 1]) || 0 }))
     .sort((x, y) => y.start - x.start);
 }
 
@@ -360,8 +382,9 @@ function upsert_(s, user) {
 
   // Ore extra oltre il turno standard
   const minuti = s.end ? Math.round((s.end - s.start) / 60000) : 0;
-  const lim = minutiTurnoDi_(s.site);
-  const extraMin = minuti > lim + TOLLERANZA_MIN ? minuti - lim : 0;
+  // Niente straordinario: uscire dopo l'orario non aggiunge ore (il turno vale le sue ore fisse)
+  const extraMin = 0;
+  const rit = ritardo_(start, s.site);
   const motivo = (s.extra && s.extra.motivo) || (prima && prima[COL_MOTIVO - 1]) || '';
   const nota = (s.extra && s.extra.nota) || (prima && prima[COL_NOTA - 1]) || '';
   let statoExtra = '';
@@ -376,7 +399,7 @@ function upsert_(s, user) {
   const posOut = s.end ? (mappa_(s.posOut) || (prima && prima[COL_POS_OUT - 1]) || '') : '';
   const row = [s.id, nome, giorno, s.site || '', start, end, ore, s.end ? 'Chiuso' : 'In corso', user && user.device || '', new Date(),
     extraMin ? round2_(extraMin / 60) : '', extraMin ? motivo : '', extraMin ? nota : '', statoExtra, posIn, posOut, turno_(start),
-    controlloSede_(s, prima)];
+    controlloSede_(s, prima), rit.ritardo || '', rit.tolti || ''];
   if (r) sh.getRange(r, 1, 1, row.length).setValues([row]);
   else { sh.appendRow(row); r = sh.getLastRow(); }
   sh.getRange(r, 3).setNumberFormat('dd/mm/yyyy');
@@ -542,10 +565,12 @@ function creaRiepilogo_(anno, mese) {
   dati.forEach(r => {
     const dip = r[1], giorno = r[2], cantiere = r[3], stato = r[7];
     if (!(giorno instanceof Date) || giorno < da || giorno >= a || diProva_(r)) return;
-    const p = perDip[dip] || (perDip[dip] = { turni: 0, ore: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0, mattine: 0, pomeriggi: 0 });
+    const p = perDip[dip] || (perDip[dip] = { turni: 0, ore: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0, mattine: 0, pomeriggi: 0, ritardi: 0, tolti: 0 });
     if (stato !== 'Chiuso') { p.aperti++; return; }
     p.turni++;
-    p.ore += oreTurnoDi_(cantiere);
+    const tolti = Number(r[COL_TOLTI - 1]) || 0;
+    p.ore += oreTurnoDi_(cantiere) - tolti / 60;
+    if (tolti) { p.ritardi++; p.tolti += tolti; }
     const fascia = r[COL_TURNO - 1] || (r[4] instanceof Date ? turno_(r[4]) : '');
     if (fascia === TURNI[0].nome) p.mattine++; else if (fascia === TURNI[1].nome) p.pomeriggi++;
     p.giorni.add(giorno.getTime());
@@ -561,25 +586,26 @@ function creaRiepilogo_(anno, mese) {
   const listaCantieri = Array.from(cantieri).sort();
   // Assenze approvate nel mese
   const ass = assenzeMese_(anno, mese);
-  Object.keys(ass).forEach(n => { if (!perDip[n]) perDip[n] = { turni: 0, ore: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0, mattine: 0, pomeriggi: 0 }; });
+  Object.keys(ass).forEach(n => { if (!perDip[n]) perDip[n] = { turni: 0, ore: 0, giorni: new Set(), cantieri: {}, aperti: 0, extraOk: 0, extraAttesa: 0, extraNo: 0, mattine: 0, pomeriggi: 0, ritardi: 0, tolti: 0 }; });
   const nomiTutti = Object.keys(perDip).sort();
   const intest = ['Dipendente', 'Giorni', 'Turni', 'Ore turni', 'Extra autorizzati', 'TOTALE ORE',
     'Extra da autorizzare', 'Extra non autorizzati', 'Turni non chiusi', 'Giorni ferie', 'Ore permesso', 'Giorni malattia',
-    'Turni mattina', 'Turni pomeriggio']
+    'Turni mattina', 'Turni pomeriggio', 'Ritardi', 'Ore tolte per ritardo']
     .concat(listaCantieri.map(c => c + ' (turni)'));
   const righe = nomiTutti.map(n => {
     const p = perDip[n], a = ass[n] || { ferie: 0, permesso: 0, malattia: 0 };
-    const base = p.ore;
+    const base = round2_(p.ore);
     return [n, p.giorni.size, p.turni, base, round2_(p.extraOk), round2_(base + p.extraOk),
-      round2_(p.extraAttesa), round2_(p.extraNo), p.aperti, a.ferie, round2_(a.permesso), a.malattia, p.mattine, p.pomeriggi]
+      round2_(p.extraAttesa), round2_(p.extraNo), p.aperti, a.ferie, round2_(a.permesso), a.malattia, p.mattine, p.pomeriggi,
+      p.ritardi, round2_(p.tolti / 60)]
       .concat(listaCantieri.map(c => p.cantieri[c] || 0));
   });
   const somma = i => round2_(righe.reduce((t, r) => t + (Number(r[i]) || 0), 0));
-  const totale = ['TOTALE', '', somma(2), somma(3), somma(4), somma(5), somma(6), somma(7), somma(8), somma(9), somma(10), somma(11), somma(12), somma(13)]
-    .concat(listaCantieri.map((c, i) => somma(14 + i)));
+  const totale = ['TOTALE', '', somma(2), somma(3), somma(4), somma(5), somma(6), somma(7), somma(8), somma(9), somma(10), somma(11), somma(12), somma(13), somma(14), somma(15)]
+    .concat(listaCantieri.map((c, i) => somma(16 + i)));
 
   const titolo = 'Riepilogo ' + anno + '-' + ('0' + (mese + 1)).slice(-2);
-  const out = scriviTabella_(titolo, 'Riepilogo ore – ' + nomeMese, intest, righe, totale, [4, 5, 6, 7, 8, 11]);
+  const out = scriviTabella_(titolo, 'Riepilogo ore – ' + nomeMese, intest, righe, totale, [4, 5, 6, 7, 8, 11, 16]);
   out.getRange(3, 6, righe.length + 2, 1).setFontWeight('bold');
   return { titolo, nomeMese, intest, righe, totale, sheetId: out.getSheetId() };
 }
@@ -613,15 +639,16 @@ function creaComuni_(anno, mese) {
   dati.forEach(r => {
     const dip = r[1], giorno = r[2], cantiere = r[3], stato = r[7];
     if (!(giorno instanceof Date) || giorno < da || giorno >= a || stato !== 'Chiuso' || diProva_(r)) return;
-    const c = per[cantiere] || (per[cantiere] = { servizi: 0, giorni: new Set(), extra: 0, operatori: new Set() });
+    const c = per[cantiere] || (per[cantiere] = { servizi: 0, giorni: new Set(), extra: 0, operatori: new Set(), tolti: 0 });
     c.servizi++;
+    c.tolti += Number(r[COL_TOLTI - 1]) || 0;
     c.giorni.add(giorno.getTime());
     c.operatori.add(dip);
     if (r[COL_STATO_EXTRA - 1] === EXTRA_OK) c.extra += Number(r[COL_EXTRA - 1]) || 0;
   });
   const intest = ['Comune / cantiere', 'Giorni di servizio', 'Servizi (turni)', 'Ore turni', 'Extra autorizzati', 'TOTALE ORE', 'Operatori'];
   const righe = Object.keys(per).sort().map(n => {
-    const c = per[n], base = c.servizi * oreTurnoDi_(n);
+    const c = per[n], base = round2_(c.servizi * oreTurnoDi_(n) - c.tolti / 60);
     return [n, c.giorni.size, c.servizi, base, round2_(c.extra), round2_(base + c.extra), Array.from(c.operatori).sort().join(', ')];
   });
   const somma = i => round2_(righe.reduce((t, r) => t + (Number(r[i]) || 0), 0));
@@ -724,10 +751,11 @@ function avvisoSerale() {
   const extra = extraInAttesa_();
   const ass = assenze_().filter(a => a.stato === ASS_ATTESA);
   const fuori = dati.filter(r => String(r[COL_SEDE - 1] || '').indexOf('FUORI SEDE') === 0 && r[4] instanceof Date && r[4] >= oggi);
+  const ritardi = dati.filter(r => Number(r[COL_TOLTI - 1]) > 0 && r[4] instanceof Date && r[4] >= oggi && !diProva_(r));
   // Il lunedì si aggiungono visite mediche e corsi scaduti o in scadenza
   let scad = [];
   if (oggi.getDay() === 1) { try { scad = scadenzeVicine_(); } catch (e) { scad = []; } }
-  if (!aperti.length && !extra.length && !ass.length && !fuori.length && !scad.length) return;
+  if (!aperti.length && !extra.length && !ass.length && !fuori.length && !scad.length && !ritardi.length) return;
   const tz = Session.getScriptTimeZone();
   const f = d => Utilities.formatDate(d, tz, 'dd/MM HH:mm');
   const li = arr => '<ul>' + arr.map(x => '<li>' + x + '</li>').join('') + '</ul>';
@@ -736,6 +764,8 @@ function avvisoSerale() {
     li(aperti.map(r => '<b>' + r[1] + '</b> · ' + r[3] + ' · entrata ' + f(r[4])));
   if (fuori.length) html += '<h3>Timbrature fuori sede oggi (' + fuori.length + ')</h3>' +
     li(fuori.map(r => '<b>' + r[1] + '</b> · ' + r[3] + ' · ' + f(r[4]) + ' · ' + r[COL_SEDE - 1]));
+  if (ritardi.length) html += '<h3>Ritardi oggi (' + ritardi.length + ')</h3>' +
+    li(ritardi.map(r => '<b>' + r[1] + '</b> · ' + r[3] + ' · entrata ' + f(r[4]) + ' · ' + r[COL_RITARDO - 1] + ' min di ritardo, tolti ' + r[COL_TOLTI - 1] + ' min'));
   if (extra.length) html += '<h3>Ore extra da autorizzare (' + extra.length + ')</h3>' +
     li(extra.map(x => '<b>' + x.dip + '</b> · ' + x.cantiere + ' · +' + String(x.extra).replace('.', ',') + ' h · ' + (x.motivo || '') + (x.nota ? ' – ' + x.nota : '')));
   if (ass.length) html += '<h3>Ferie e permessi da approvare (' + ass.length + ')</h3>' +
@@ -746,7 +776,7 @@ function avvisoSerale() {
   html += '<p>Si sistemano dall\'app: tieni premuto il logo GE3CO → Area responsabile.</p>';
   MailApp.sendEmail({
     to: EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail(),
-    subject: 'GE3CO – Da sistemare oggi (' + (aperti.length + extra.length + ass.length + fuori.length + scad.length) + ')',
+    subject: 'GE3CO – Da sistemare oggi (' + (aperti.length + extra.length + ass.length + fuori.length + scad.length + ritardi.length) + ')',
     htmlBody: html,
   });
 }

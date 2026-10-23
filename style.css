@@ -618,3 +618,6 @@ dialog .btn:has(> .ico) { display: flex; justify-content: flex-start; text-align
 .oh-pari { color: var(--muted); }
 .oh .oh-carico { border-top: 1px solid var(--line); }
 @media (prefers-color-scheme: dark) { .oh-rec { background: #142640; color: #93c5fd; } }
+
+.rit-tag { display: block; color: #c62828; font-weight: 650; font-size: 11px; letter-spacing: 0; }
+@media (prefers-color-scheme: dark) { .rit-tag { color: #f87171; } }

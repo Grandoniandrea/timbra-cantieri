@@ -116,3 +116,12 @@ Nello script sono nella lista `IMPIANTI` in cima a `fuoriSede_`. Per spostare un
 ## Aggiornamento: committente legato al nome del cantiere
 
 Quando dall'app si salva l'elenco cantieri, la colonna E "Committente" ora segue il nome del cantiere e non il numero di riga. Così, se si cancella o si sposta un cantiere, Ecofor Service ed Ecoacciai non perdono il loro committente. Serve ripubblicare lo script.
+
+## Aggiornamento: orari di entrata, ritardi, niente straordinario (dal 24/10/2026)
+
+- L'entrata si timbra al massimo 10 minuti prima dell'orario: Geofor 06:00 e 13:00, Ecofor Service 07:00, Ecoacciai 08:00 (l'app blocca prima).
+- Fino a 15 minuti di ritardo non si perde niente. Oltre, si tolgono i minuti arrotondati al quarto d'ora successivo (20 min di ritardo = 30 min tolti, 40 min = 45 min).
+- Nella scheda Timbrature ci sono due nuove colonne: "Ritardo (min)" e "Minuti tolti". I riepiloghi tolgono le ore per ritardo e hanno le colonne "Ritardi" e "Ore tolte per ritardo".
+- L'email delle 20 ha la sezione "Ritardi oggi".
+- Uscire dopo l'orario non dà straordinario: il turno vale sempre le sue ore fisse.
+- Gli orari si cambiano in `ORARI_TURNO` nello script (e nella stessa costante in app.js).

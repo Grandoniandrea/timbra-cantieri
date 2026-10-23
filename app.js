@@ -51,7 +51,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 65;
+const APP_VERSION = 66;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -288,7 +288,7 @@ function render() {
     return `<li ${isEmployee() ? '' : `data-edit-shift="${s.id}" style="cursor:pointer"`}>
       <span class="dot" style="background:${esc(site.color)}"></span>
       <div class="grow"><b>${esc(site.name)}</b><span>${fmtDate(s.start)} · ${(fascia(s.start) || { nome: 'Fuori orario' }).nome} · ${fmtTime(s.start)} → ${fmtTime(s.end)}</span></div>
-      <span class="log-dur">${fmtDur(s.end - s.start)}${s.demo ? '<small class="prova-tag">🧪 prova · non conta</small>' : extraMin(s) ? `<small class="extra-tag">+${fmtDur(extraMin(s) * 60000)} extra</small>` : ''}</span>
+      <span class="log-dur">${fmtDur(s.end - s.start)}${s.demo ? '<small class="prova-tag">🧪 prova · non conta</small>' : (r => r.tolti ? `<small class="rit-tag">ritardo · −${r.tolti} min</small>` : '')(ritardoDi(site.name, s.start))}</span>
     </li>`;
   }).join('') : '<li class="empty">Le tue timbrature compariranno qui.</li>';
 }
@@ -298,7 +298,13 @@ document.addEventListener('click', e => {
   if (!t) return;
   if (t.dataset.in) {
     const siteId = t.dataset.in;
-    requireSede('entrata', pos => { clockIn(siteId, pos); toast(`Entrata ${siteById(siteId).name} alle ${fmtTime(Date.now())}`); });
+    if (bloccoEntrata(siteId)) return;
+    requireSede('entrata', pos => {
+      clockIn(siteId, pos);
+      const r = DEMO.on || isDemo() ? {} : ritardoDi(siteById(siteId).name, db.active.start);
+      if (r.tolti) setTimeout(() => showBigOk('Entrata in ritardo', siteById(siteId).name, `alle ${fmtTime(db.active.start)} · ${testoRitardo(r)}`), 50);
+      else toast(`Entrata ${siteById(siteId).name} alle ${fmtTime(Date.now())}`);
+    });
   }
   else if (t.dataset.editSite) editSite(t.dataset.editSite);
   else if (t.dataset.editShift) editShift(t.dataset.editShift);
@@ -391,19 +397,22 @@ function editShift(id) {
 
 function pickSiteForNfc(pos, scegli) {
   const fissoSite = db.fisso ? db.sites.find(s => !s.hidden && s.name === db.fisso) : null;
+  const ritTxt = id => { const r = DEMO.on || isDemo() ? {} : ritardoDi(siteById(id).name, db.active.start); return r.tolti ? ' · ' + testoRitardo(r) : ''; };
   if (fissoSite && !scegli) {
+    if (bloccoEntrata(fissoSite.id)) return;
     clockIn(fissoSite.id, pos);
     const undo = () => { if (db.active) enqueueDelete(db.active.id); db.active = null; save(); };
-    return setTimeout(() => showBigOk('Entrata', fissoSite.name, `alle ${fmtTime(db.active.start)}`, undo), 50);
+    return setTimeout(() => showBigOk('Entrata', fissoSite.name, `alle ${fmtTime(db.active.start)}${ritTxt(fissoSite.id)}`, undo), 50);
   }
   openDialog(`
     <h3>Dove sei oggi?</h3>
     <p>Scegli il cantiere per timbrare l'entrata.</p>
     <div class="pick">${db.sites.filter(s => !s.hidden).map(s => `<button value="${s.id}"><span class="dot" style="background:${esc(s.color)}"></span>${esc(s.name)}</button>`).join('')}</div>
     <button class="btn ghost" value="">Annulla</button>`, siteId => {
+    if (!siteId || bloccoEntrata(siteId)) return;
     clockIn(siteId, pos);
     const undo = () => { if (db.active) enqueueDelete(db.active.id); db.active = null; save(); };
-    setTimeout(() => showBigOk('Entrata', siteById(siteId).name, `alle ${fmtTime(db.active.start)}`, undo), 50);
+    setTimeout(() => showBigOk('Entrata', siteById(siteId).name, `alle ${fmtTime(db.active.start)}${ritTxt(siteId)}`, undo), 50);
   });
 }
 
@@ -1600,7 +1609,7 @@ function oreMeseDi(nome) {
   if (!planMese) return null;
   let fatte = 0, ass = 0;
   planMese.turni.filter(t => stessoOperatore(nome, t.dip)).forEach(t => {
-    fatte += oreTurnoDi(t.cantiere);
+    fatte += oreTurnoDi(t.cantiere) - (Number(t.tolti) || 0) / 60;
     if (t.extra && t.statoExtra === 'Autorizzato') fatte += Number(t.extra) || 0;
   });
   planMese.ass.forEach(q => { if (q.operatori.some(o => stessoOperatore(nome, o))) ass += cfg().oreTurno; });
@@ -1947,11 +1956,14 @@ function modDoc(week) {
   for (let i = 0; i < Math.max(1, blocks.length); i += MOD_BLOCCHI) pagine.push(blocks.slice(i, i + MOD_BLOCCHI));
   // Ore di cantiere fisse: ogni turno vale oreTurno ore, con l'orario di servizio del turno (06–11 o 13–18)
   const orari = s => {
-    const nome = siteById(s.siteId).name, t = turnoCliente(nome), ore = oreTurnoDi(nome);
-    if (t) return { in: t.inizio, out: t.fine, tot: hm(ore * 3600000) };
+    const nome = siteById(s.siteId).name, t = turnoCliente(nome), ore = oreTimbratura(s);
+    // Con il ritardo l'entrata scritta è l'orario + i minuti tolti (es. 06:30), e il totale scende
+    const tolti = s.demo ? 0 : ritardoDi(nome, s.start).tolti;
+    const sposta = hmS => { const m = Number(hmS.slice(0, 2)) * 60 + Number(hmS.slice(3, 5)) + tolti; return hhmm(m); };
+    if (t) return { in: sposta(t.inizio), out: t.fine, tot: hm(ore * 3600000) };
     const pom = (fascia(s.start) || {}).nome === 'Pomeriggio' || new Date(s.start).getHours() >= 12;
-    const h0 = pom ? 13 : 6;
-    return { in: `${pad(h0)}:00`, out: `${pad(h0 + Math.floor(ore))}:${pad(Math.round((ore % 1) * 60))}`, tot: hm(ore * 3600000) };
+    const h0 = pom ? 13 : 6, oreT = oreTurnoDi(nome);
+    return { in: sposta(`${pad(h0)}:00`), out: `${pad(h0 + Math.floor(oreT))}:${pad(Math.round((oreT % 1) * 60))}`, tot: hm(ore * 3600000) };
   };
   const cell = (b, d, k) => {
     const s = b && b.giorni[d];
@@ -1980,7 +1992,7 @@ function modDoc(week) {
       Il lavoratore sarà chiamato a rispondere in caso di anomalia tra quanto da esso dichiarato e quanto previsto dagli ordini di servizio. La ripetizione di eventuali abusi sarà punita conformemente a quanto prevede il nostro CCNL.</p>
     </div>
   </div>`;
-  const tot = shifts.reduce((t, x) => t + oreTurnoDi(siteById(x.siteId).name) * 3600000, 0);
+  const tot = shifts.reduce((t, x) => t + oreTimbratura(x) * 3600000, 0);
   return { html: pagine.map(one).join('<div class="mod-cut"></div>'), turni: shifts.length, tot, moduli: pagine.length, prove: shifts.filter(s => s.demo).length };
 }
 // Crea il PDF del modulo sul telefono e lo condivide (WhatsApp, email…) al responsabile
@@ -2365,10 +2377,42 @@ function durataTurnoMin(siteName) {
   if (t && t.inizio && t.fine) { const m = x => Number(x.slice(0, 2)) * 60 + Number(x.slice(3, 5)); return m(t.fine) - m(t.inizio); }
   return oreTurnoDi(siteName) * 60;
 }
-function extraMin(s) {
-  if (!s.end) return 0;
-  const c = cfg(), min = Math.round((s.end - s.start) / 60000), lim = durataTurnoMin(siteById(s.siteId).name);
-  return min > lim + c.tolleranzaMin ? min - lim : 0;
+// Niente straordinario: uscire dopo l'orario non aggiunge ore, il turno vale le sue ore fisse
+function extraMin() { return 0; }
+
+// ---------- Orari di entrata (le stesse regole sono nello script Google) ----------
+// Inizio e fine dei turni per committente, in minuti dalla mezzanotte
+const ORARI_TURNO = { 'GEOFOR': [[360, 660], [780, 1080]], 'ECOFOR SERVICE': [[420, 930]], 'ECOACCIAI': [[480, 960]] };
+const ANTICIPO_MIN = 10, TOLLERANZA_RITARDO_MIN = 15;
+const hhmm = m => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+const turniDi = nome => ORARI_TURNO[committenteDi(nome)] || ORARI_TURNO.GEOFOR;
+const minDi = t => { const d = new Date(t); return d.getHours() * 60 + d.getMinutes(); };
+// Ritardo sull'orario del turno: fino a 15 min non si perde niente, oltre si tolgono i minuti arrotondati al quarto d'ora
+const REGOLE_ORARIO_DAL = new Date(2026, 9, 24).getTime(); // le timbrature precedenti restano come erano
+function ritardoDi(siteName, t) {
+  if (t < REGOLE_ORARIO_DAL) return { ritardo: 0, tolti: 0, inizio: '' };
+  const m = minDi(t);
+  let rif = null;
+  turniDi(siteName).forEach(x => { if (m >= x[0] - ANTICIPO_MIN) rif = x; });
+  if (!rif) return { ritardo: 0, tolti: 0, inizio: '' };
+  const ritardo = Math.max(0, m - rif[0]);
+  const tolti = ritardo > TOLLERANZA_RITARDO_MIN ? Math.min(Math.ceil(ritardo / 15) * 15, oreTurnoDi(siteName) * 60) : 0;
+  return { ritardo, tolti, inizio: hhmm(rif[0]) };
+}
+// Ore che vale un turno timbrato: le ore del cantiere meno quelle tolte per ritardo
+const oreTimbratura = s => oreTurnoDi(siteById(s.siteId).name) - (s.demo ? 0 : ritardoDi(siteById(s.siteId).name, s.start).tolti) / 60;
+const testoRitardo = r => r.tolti ? `ritardo di ${r.ritardo} min sull'orario delle ${r.inizio}: ti vengono tolti ${r.tolti} min` : '';
+// Si può timbrare l'entrata adesso? Al massimo 10 minuti prima dell'orario (la modalità prova e la demo non hanno limiti)
+function bloccoEntrata(siteId) {
+  if (isDemo() || DEMO.on) return false;
+  const nome = siteById(siteId).name, m = minDi(Date.now()), turni = turniDi(nome);
+  if (turni.some(x => m >= x[0] - ANTICIPO_MIN && m < x[1])) return false;
+  const prossimo = turni.find(x => m < x[0] - ANTICIPO_MIN);
+  const msg = prossimo
+    ? `Il turno di <b>${esc(nome)}</b> inizia alle <b>${hhmm(prossimo[0])}</b>: l'entrata si timbra dalle <b>${hhmm(prossimo[0] - ANTICIPO_MIN)}</b>.`
+    : `A quest'ora non c'è un turno su <b>${esc(nome)}</b> (orari: ${turni.map(x => hhmm(x[0]) + '–' + hhmm(x[1])).join(', ')}). Se devi lavorare lo stesso, avvisa il responsabile.`;
+  setTimeout(() => openDialog(`<h3>Troppo presto per timbrare</h3><p>${msg}</p><button class="btn big" value="">OK</button>`), 50);
+  return true;
 }
 function afterClockOut(shift, viaNfc) {
   if (extraMin(shift)) return setTimeout(() => justifyExtra(shift), 50);
@@ -2836,7 +2880,7 @@ function statsFor(filter) {
     const k = t.cantiere || '—';
     const x = by[k] || (by[k] = { nome: k, turni: 0, ore: 0, extra: 0, operatori: new Set() });
     x.turni++;
-    x.ore += oreTurnoDi(k);
+    x.ore += oreTurnoDi(k) - (Number(t.tolti) || 0) / 60;
     if (t.extra && t.statoExtra === 'Autorizzato') { x.ore += t.extra; x.extra += t.extra; }
     x.operatori.add(t.dip);
   });
