@@ -121,7 +121,7 @@ const needAss = () => need('assenze', 'assenze', null, o => o.assenze || []);
 const needInt = () => need('interventi', 'interventi');
 const needScad = () => need('scad', 'scad');
 const needDpi = () => need('dpi', 'dpi');
-function refresh() { S.cache = {}; renderPage(); toast('Aggiorno i dati…'); }
+function refresh() { if (S.plan && S.plan.dirty && !confirm('Ricaricare e perdere le modifiche al programma?')) return; S.plan = null; S.cache = {}; renderPage(); toast('Aggiorno i dati…'); }
 function invalidate(...keys) { keys.forEach(k => delete S.cache[k]); }
 
 // ---------- Accesso ----------
@@ -160,7 +160,7 @@ function enter(out) {
   S.cache = {}; S.view = 'dashboard'; S.month = monthNow(); S.week = mondayOf(todayIso());
   renderShell();
 }
-function logout(msg) { S.pwd = null; S.demo = false; S.cache = {}; dlg.close(); renderLogin(msg); }
+function logout(msg) { DEMO_DB = null; S.plan = null; S.pwd = null; S.demo = false; S.cache = {}; dlg.close(); renderLogin(msg); }
 
 // ---------- Struttura ----------
 function navBadge(v) {
@@ -218,7 +218,10 @@ function renderNav() {
     `<button data-act="more" ${TABS.includes(S.view) ? '' : 'aria-current="page"'}>${icon('menu')}<span>Altro</span></button>`;
   const bell = $('#bell'); if (bell) bell.innerHTML = icon('bell') + (pendingCount() ? '<span class="dot"></span>' : '');
 }
-function go(v) { S.view = v; dlg.close(); window.scrollTo(0, 0); renderPage(); }
+function go(v) {
+  if (S.plan && S.plan.dirty && v !== S.view && S.view === 'programma' && !confirm('Ci sono modifiche non salvate al programma. Uscire e perderle?')) return;
+  if (S.plan && S.plan.dirty && v !== 'programma') S.plan = null;
+  S.view = v; dlg.close(); window.scrollTo(0, 0); renderPage(); }
 
 function head(actions) {
   const [t, p] = VIEWS[S.view];
@@ -375,57 +378,216 @@ function pTimbrature() {
     const ore = rows.filter(t => t.end).reduce((s, t) => s + (t.end - t.start) / 36e5, 0);
     body = `<p class="sub">${rows.length} timbrature · ${fmtH(ore)} ore effettive · ${monthName(m)}</p>
     <div class="table-box"><table><thead><tr><th>Giorno</th><th>Operatore</th><th>Cantiere</th><th>Entrata</th><th>Uscita</th><th>Durata</th><th>Posizione</th><th>Extra</th><th>Stato</th></tr></thead><tbody>
-    ${rows.map(t => `<tr><td>${fmtDay(t.start)}</td><td class="name">${esc(t.dip)}</td><td>${esc(cap(t.cantiere))}<span class="small">${esc(t.turno || '')}</span></td>
+    ${rows.map(t => `<tr data-tedit="${esc(t.id)}"><td>${fmtDay(t.start)}</td><td class="name"><button class="link" data-tedit="${esc(t.id)}" style="color:var(--ink);text-decoration:none">${esc(t.dip)}</button></td><td>${esc(cap(t.cantiere))}<span class="small">${esc(t.turno || '')}</span></td>
       <td>${fmtTime(t.start)}${t.tolti ? `<span class="small" style="color:#9a4a05">ritardo −${t.tolti} min</span>` : ''}</td><td>${t.end ? fmtTime(t.end) : '—'}</td><td>${t.end ? fmtDur(t.end - t.start) : fmtDur(Date.now() - t.start)}</td>
       <td>${esc(cap(t.sede) || '—')}${isMap(t.posIn) ? ` <a href="${esc(t.posIn.split(' ')[0])}" target="_blank" rel="noopener">mappa</a>` : ''}</td>
       <td>${t.extra ? `+${t.extra} min<span class="small">${esc(t.statoExtra)}</span>` : '—'}</td><td>${statoTimbratura(t)}</td></tr>`).join('') || '<tr><td colspan="9" class="empty">Nessuna timbratura con questi filtri.</td></tr>'}
     </tbody></table></div>
-    <p class="foot">Per correggere una timbratura usa l'app Timbra Cantieri → area responsabile → Modifica timbrature.</p>`;
+    <p class="foot">Tocca una timbratura per correggere orari o cantiere, o per eliminarla.</p>`;
   }
-  return head(`<a class="btn ghost" href="${APP_URL}" target="_blank" rel="noopener">Apri l'app operatori</a>`) + tools + body;
+  return head() + tools + body;
 }
 
-// ---------- Programma ----------
+// ---------- Programma (modificabile) ----------
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const isAss = t => ASSENZE.includes(t);
+const clone = o => JSON.parse(JSON.stringify(o));
+function planReady(w) {
+  if (S.plan && S.plan.week === w) return S.plan;
+  const pl = needWeek(w);
+  if (!pl || pl.error) return pl;
+  S.plan = { week: w, squadre: clone(pl.squadre || []), operatori: pl.operatori || [], cantieri: (pl.cantieri || []).filter(c => c.attivo !== false), dirty: false };
+  return S.plan;
+}
+const oreContratto = nome => { const o = S.plan && S.plan.operatori.find(p => sameName(p.nome, nome)); return o && Number(o.ore) > 0 ? Number(o.ore) : 30; };
+function oreSett(squadre) {
+  const m = {};
+  squadre.forEach(s => s.operatori.forEach(o => {
+    const k = o.trim().toLowerCase(); const x = m[k] || (m[k] = { nome: o, h: 0 });
+    x.h += isAss(s.turno) ? ORE_GEOFOR : oreTurno(s.cantiere);
+  }));
+  return m;
+}
+function doppiDi(squadre) {
+  const m = {};
+  squadre.filter(s => !isAss(s.turno)).forEach(s => s.operatori.forEach(o => { const k = s.data + '|' + o.toLowerCase(); (m[k] = m[k] || new Set()).add(s.turno); }));
+  return (d, n) => (m[d + '|' + String(n).toLowerCase()] || new Set()).size > 1;
+}
+const siteColor = n => ((S.plan && S.plan.cantieri.find(c => c.nome === n)) || S.cantieri.find(c => c.nome === n) || {}).colore || 'var(--accent)';
+function changeWeek(w) {
+  if (S.plan && S.plan.dirty && !confirm('Ci sono modifiche non salvate al programma. Cambiare settimana e perderle?')) return;
+  if (S.plan && S.plan.dirty) S.plan = null;
+  S.week = w; renderPage();
+}
 function pProgramma() {
   const w = S.week || mondayOf(todayIso());
-  const pl = needWeek(w);
+  const P = planReady(w);
   const days = [...Array(7)].map((_, i) => addDays(w, i));
   const today = todayIso();
   const tools = `<div class="toolbar weeknav">
     <button class="icon-btn" data-week="-7" aria-label="Settimana precedente">${icon('left')}</button>
     <b>Dal ${dayOf(w).toLocaleDateString('it-IT', { day: 'numeric', month: 'long' })} al ${dayOf(days[6]).toLocaleDateString('it-IT', { day: 'numeric', month: 'long' })}</b>
     <button class="icon-btn" data-week="7" aria-label="Settimana successiva">${icon('right')}</button>
-    ${w !== mondayOf(today) ? '<button class="btn plain sm" data-week="0">Questa settimana</button>' : ''}</div>`;
-  if (!pl || pl.error) return head() + tools + (pl && pl.error ? errBox(pl.error) : loadingBox());
-  const squadre = pl.squadre.filter(s => match(s.cantiere, s.operatori.join(' '), s.turno));
-  const lavoro = squadre.filter(s => !ASSENZE.includes(s.turno));
-  const cantieri = [...new Set(lavoro.map(s => s.cantiere))].sort();
-  const cell = (list, cls) => list.map(s => `<span class="sq ${cls || ''}"><i>${esc(s.turno)}</i> ${esc(s.operatori.join(', '))}</span>`).join('') || '<span class="small" style="color:#9a9a96">—</span>';
-  const rows = cantieri.map(c => `<tr><td class="name">${esc(cap(c))}<span class="small">${impianto(c) ? 'Impianto · 8 h' : 'Geofor · 5 h'}</span></td>
-    ${days.map(d => `<td class="${d === today ? 'today-col' : ''}">${cell(lavoro.filter(s => s.cantiere === c && s.data === d))}</td>`).join('')}</tr>`).join('');
-  const ass = squadre.filter(s => ASSENZE.includes(s.turno));
-  const assRow = ass.length ? `<tr><td class="name">Assenze</td>${days.map(d => `<td class="${d === today ? 'today-col' : ''}">${cell(ass.filter(s => s.data === d), 'ass')}</td>`).join('')}</tr>` : '';
-  const table = `<div class="table-box plan"><table><thead><tr><th>Cantiere</th>${days.map(d => `<th class="${d === today ? 'today-col' : ''}">${dayOf(d).toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric' })}</th>`).join('')}</tr></thead>
-    <tbody>${rows + assRow || '<tr><td colspan="8" class="empty">Nessuna squadra in programma questa settimana.</td></tr>'}</tbody></table></div>`;
-
-  // Specchietto ore: programma della settimana contro ore da contratto
-  const ops = (pl.operatori || []).filter(o => o.attivo !== false);
-  const ore = {};
-  pl.squadre.forEach(s => s.operatori.forEach(o => {
-    const k = o.trim().toLowerCase(); const x = ore[k] || (ore[k] = { nome: o, h: 0 });
-    x.h += ASSENZE.includes(s.turno) ? ORE_GEOFOR : oreTurno(s.cantiere);
-  }));
-  const names = new Map(); ops.forEach(o => names.set(o.nome.toLowerCase(), o)); Object.values(ore).forEach(x => { if (!names.has(x.nome.toLowerCase())) names.set(x.nome.toLowerCase(), { nome: x.nome, ore: 30 }); });
-  const box = [...names.values()].map(o => {
-    const h = (ore[o.nome.toLowerCase()] || { h: 0 }).h, max = o.ore || 30, d = h - max;
-    return { nome: o.nome, h, max, st: d > 0 ? 'over' : d < 0 ? 'under' : 'ok' };
-  }).filter(r => match(r.nome)).sort((a, b) => ({ over: 0, under: 1, ok: 2 })[a.st] - ({ over: 0, under: 1, ok: 2 })[b.st] || a.nome.localeCompare(b.nome));
+    ${w !== mondayOf(today) ? '<button class="btn plain sm" data-week="0">Oggi</button>' : ''}</div>`;
+  const actions = `<button class="btn ghost" data-act="copyPrev">Copia settimana prima</button><button class="btn ghost" data-act="ops">${icon('dipendenti')}Operatori</button><button class="btn plain" data-act="printPlan">Stampa</button>`;
+  if (!P || P.error) return head(actions) + tools + (P && P.error ? errBox(P.error) : loadingBox());
+  const isD = doppiDi(P.squadre);
+  const hit = s => match(s.cantiere, s.operatori.join(' '), s.turno);
+  const dayHtml = d => {
+    const ass = P.squadre.filter(s => s.data === d && isAss(s.turno));
+    return `<section class="day ${d === today ? 'is-today' : ''}"><h3>${dayOf(d).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'short' })}</h3>
+      ${TURNI.map(t => `<div class="turno"><small>${t.nome} ${t.orario}</small>
+        ${P.squadre.filter(s => s.data === d && s.turno === t.nome).map(s => `<button class="sqb ${hit(s) ? '' : 'dim'}" data-sq="${esc(s.id)}">
+          <i style="background:${esc(siteColor(s.cantiere))}"></i><span><b>${esc(cap(s.cantiere))}</b> ${s.operatori.map(o => `<span class="${isD(d, o) ? 'doppio' : ''}">${esc(o)}</span>`).join(', ')}${s.nota ? `<em>${esc(s.nota)}</em>` : ''}</span></button>`).join('')}
+        <button class="addsq" data-addsq="${d}|${t.nome}">+ Squadra</button></div>`).join('')}
+      <button class="assb ${ass.length ? 'on' : ''}" data-assday="${d}">${ass.length ? ass.map(a => `<b>${esc(a.turno)}:</b> ${esc(a.operatori.join(', '))}`).join('<br>') : '+ Ferie, malattia, permesso'}</button>
+    </section>`;
+  };
+  const ore = oreSett(P.squadre);
+  const names = new Map(); P.operatori.filter(o => o.attivo !== false).forEach(o => names.set(o.nome.toLowerCase(), o.nome)); Object.values(ore).forEach(x => { if (!names.has(x.nome.toLowerCase())) names.set(x.nome.toLowerCase(), x.nome); });
+  const box = [...names.values()].map(n => { const h = (ore[n.toLowerCase()] || { h: 0 }).h, max = oreContratto(n), d = h - max; return { nome: n, h, max, d, st: d > 0 ? 'over' : d < 0 ? 'under' : 'ok' }; })
+    .filter(r => match(r.nome)).sort((a, b) => ({ over: 0, under: 1, ok: 2 })[a.st] - ({ over: 0, under: 1, ok: 2 })[b.st] || a.nome.localeCompare(b.nome));
   const lbl = { over: ['no', 'sfora'], under: ['wait', 'sotto'], ok: ['ok', 'in regola'] };
   const spec = `<article class="card"><div class="card-head"><h2>Specchietto ore</h2><small>programma contro contratto</small></div>
-    <div class="rows">${box.map(r => `<div style="display:grid;gap:6px"><div class="row"><div class="txt"><b>${esc(r.nome)}</b></div><span class="sub"><b style="color:var(--ink)">${fmtH(r.h)}</b>/${fmtH(r.max)} h</span>${chip(lbl[r.st][0], lbl[r.st][1])}</div>
-      <div class="meter"><i class="${r.st === 'ok' ? '' : r.st}" style="width:${Math.min(100, r.max ? r.h / r.max * 100 : 0)}%"></i></div></div>`).join('') || '<p class="empty">Nessun operatore.</p>'}</div></article>`;
-  return head(`<a class="btn ghost" href="${APP_URL}" target="_blank" rel="noopener">Modifica nell'app</a>`) + tools + table + `<div class="grid g-2">${spec}<article class="card"><h2>Come leggere</h2>
-    <p class="sub">Ogni turno vale le ore del suo cantiere: Geofor 5 h, Ecofor Service ed Ecoacciai 8 h. Ferie, malattia e permesso contano 5 h. Le squadre si compongono dall'app Timbra Cantieri (area responsabile → Programma della settimana).</p></article></div>`;
+    <div class="rows">${box.map(r => `<div style="display:grid;gap:6px"><div class="row"><div class="txt"><b>${esc(r.nome)}</b></div><span class="sub"><b style="color:var(--ink)">${fmtH(r.h)}</b>/${fmtH(r.max)} h${r.d ? ` · ${r.d > 0 ? '+' : '−'}${fmtH(Math.abs(r.d))}` : ''}</span>${chip(lbl[r.st][0], lbl[r.st][1])}</div>
+      <div class="meter"><i class="${r.st === 'ok' ? '' : r.st}" style="width:${Math.min(100, r.max ? r.h / r.max * 100 : 0)}%"></i></div></div>`).join('') || '<p class="empty">Nessun operatore: aggiungili da Operatori.</p>'}</div>
+    <p class="sub">Geofor 5 h a turno, Ecofor Service ed Ecoacciai 8 h. Ferie, malattia e permesso contano 5 h. <span class="doppio">Nome in rosso</span> = doppio turno.</p></article>`;
+  const save = `<div class="savebar ${P.dirty ? 'show' : ''}"><span>${P.dirty ? 'Modifiche non salvate' : 'Programma salvato'}</span>
+    ${P.dirty ? '<button class="btn plain sm" data-act="undoPlan">Annulla</button>' : ''}<button class="btn sm" data-act="savePlan" ${P.dirty ? '' : 'disabled'}>Salva il programma</button></div>`;
+  return head(actions) + tools + save + `<div class="days">${days.map(dayHtml).join('')}</div>` + `<div class="grid g-2">${spec}</div>`;
+}
+function sqEdit(id, data, turno) {
+  const P = S.plan; if (!P) return;
+  const s = id ? P.squadre.find(x => x.id === id) : { id: uid(), data, turno, cantiere: '', operatori: [], nota: '' };
+  if (!s) return;
+  const names = P.cantieri.map(c => c.nome); if (s.cantiere && !names.includes(s.cantiere)) names.push(s.cantiere);
+  const def = s.cantiere || names[0] || '';
+  const altrove = (n, stesso) => P.squadre.some(x => x.id !== s.id && !isAss(x.turno) && x.data === s.data && (x.turno === s.turno) === stesso && x.operatori.some(o => sameName(o, n)));
+  const inAss = n => (P.squadre.find(x => isAss(x.turno) && x.data === s.data && x.operatori.some(o => sameName(o, n))) || {}).turno;
+  const ore = oreSett(P.squadre.filter(x => x.id !== s.id));
+  const people = P.operatori.filter(p => p.attivo !== false || s.operatori.some(o => sameName(o, p.nome)));
+  const t = TURNI.find(x => x.nome === s.turno) || { nome: s.turno, orario: '' };
+  openDlg(`<form id="sqForm" style="display:grid;gap:12px">
+    <h2>${id ? 'Modifica squadra' : 'Nuova squadra'}</h2><p class="sub">${esc(dayOf(s.data).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' }))} · ${esc(t.nome)} ${esc(t.orario)}</p>
+    <label class="field">Cantiere<select name="cantiere">${names.map(n => `<option value="${esc(n)}" ${n === def ? 'selected' : ''}>${esc(cap(n))}</option>`).join('')}</select></label>
+    ${people.length ? [0, 1, 2, 3].map(i => `<label class="field">Operatore ${i + 1}${i ? ' (facoltativo)' : ''}<select name="op"><option value="">${i ? '—' : 'Scegli…'}</option>
+      ${people.map(p => { const x = ore[p.nome.toLowerCase()] || { h: 0 }; const a = inAss(p.nome);
+        return `<option value="${esc(p.nome)}" ${s.operatori[i] && sameName(s.operatori[i], p.nome) ? 'selected' : ''}>${esc(p.nome)} · ${fmtH(x.h)}/${fmtH(oreContratto(p.nome))} h${a ? ' · IN ' + a.toUpperCase() : altrove(p.nome, true) ? ' · già in squadra' : altrove(p.nome, false) ? ' · doppio turno' : ''}</option>`; }).join('')}</select></label>`).join('') : '<p class="empty">Nessun operatore: aggiungili da Operatori.</p>'}
+    <label class="field">Nota (facoltativa)<input name="nota" maxlength="200" value="${esc(s.nota || '')}" placeholder="es. mezzo, indirizzo, corso"></label>
+    <div class="actions">${id ? '<button type="button" class="btn plain" data-act="delSq">Elimina</button>' : ''}<button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">OK</button></div></form>`);
+  $('#sqForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = new FormData(e.target), ops = [...new Set(f.getAll('op').map(String).filter(Boolean))];
+    if (!ops.length) return toast('Scegli almeno un operatore');
+    Object.assign(s, { cantiere: String(f.get('cantiere') || def), operatori: ops, nota: String(f.get('nota') || '').trim() });
+    if (!id) P.squadre.push(s);
+    P.dirty = true; dlg.close(); renderPage();
+  });
+  const del = $('[data-act="delSq"]');
+  if (del) del.addEventListener('click', ev => { ev.stopPropagation(); P.squadre = P.squadre.filter(x => x.id !== s.id); P.dirty = true; dlg.close(); renderPage(); });
+}
+function assEdit(d) {
+  const P = S.plan; if (!P) return;
+  const tipoDi = (n, g) => (P.squadre.find(x => x.data === (g || d) && isAss(x.turno) && x.operatori.some(o => sameName(o, n))) || {}).turno || '';
+  const occupato = n => P.squadre.some(x => x.data === d && !isAss(x.turno) && x.operatori.some(o => sameName(o, n)));
+  const people = P.operatori.filter(p => p.attivo !== false || tipoDi(p.nome));
+  const fine = [...Array(7)].map((_, i) => addDays(P.week, i)).filter(x => x >= d);
+  openDlg(`<form id="assForm" style="display:grid;gap:12px"><h2>Ferie, malattia, permesso</h2>
+    <p class="sub">${esc(dayOf(d).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' }))} · ogni assenza conta 5 ore</p>
+    <div class="rows">${people.map((p, i) => `<div class="row"><div class="txt"><b>${esc(p.nome)}</b>${occupato(p.nome) ? '<span>in squadra quel giorno</span>' : ''}</div>
+      <label class="sr" for="as${i}">Assenza di ${esc(p.nome)}</label><select id="as${i}" name="as${i}" style="height:40px;border-radius:12px;border:1px solid #c9ccc2;padding:0 10px;background:#fff;font-size:16px">
+      <option value="">—</option>${ASSENZE.map(a => `<option ${tipoDi(p.nome) === a ? 'selected' : ''}>${a}</option>`).join('')}</select></div>`).join('') || '<p class="empty">Nessun operatore.</p>'}</div>
+    ${fine.length > 1 ? `<label class="field">Vale per<select name="fino">${fine.map((x, k) => `<option value="${x}">${k ? `fino a ${dayOf(x).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric' })} (${k + 1} giorni)` : 'solo questo giorno'}</option>`).join('')}</select></label>` : ''}
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">OK</button></div></form>`);
+  $('#assForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const f = new FormData(e.target), scelta = {};
+    people.forEach((p, i) => { scelta[p.nome] = String(f.get('as' + i) || ''); });
+    const cambiati = people.filter(p => scelta[p.nome] !== tipoDi(p.nome)).map(p => p.nome);
+    const fino = String(f.get('fino') || d);
+    fine.filter(x => x <= fino).forEach((g, k) => {
+      const nuovo = {}; people.forEach(p => { nuovo[p.nome] = k === 0 || cambiati.includes(p.nome) ? scelta[p.nome] : tipoDi(p.nome, g); });
+      const vecchi = P.squadre.filter(x => x.data === g && isAss(x.turno));
+      const fuori = vecchi.map(x => ({ turno: x.turno, ops: x.operatori.filter(o => !people.some(p => sameName(p.nome, o))) }));
+      P.squadre = P.squadre.filter(x => !(x.data === g && isAss(x.turno)));
+      ASSENZE.forEach(a => {
+        const ops = people.filter(p => nuovo[p.nome] === a).map(p => p.nome).concat((fuori.find(x => x.turno === a) || { ops: [] }).ops);
+        const prima = vecchi.find(x => x.turno === a);
+        if (ops.length) P.squadre.push({ id: prima ? prima.id : uid(), data: g, turno: a, cantiere: a.toUpperCase(), operatori: ops, nota: '' });
+      });
+    });
+    P.dirty = true; dlg.close(); renderPage();
+  });
+}
+async function savePlan(btn) {
+  const P = S.plan; if (!P) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvo…'; }
+  try {
+    const out = await queued('salvaprogramma', { da: P.week, a: addDays(P.week, 6), squadre: P.squadre });
+    S.cache['p:' + P.week] = out;
+    S.plan = { week: P.week, squadre: clone(out.squadre || P.squadre), operatori: out.operatori || P.operatori, cantieri: (out.cantieri || P.cantieri).filter(c => c.attivo !== false), dirty: false };
+    toast('Programma salvato: gli operatori lo vedono sul telefono');
+  } catch (e) { const w = why(e); if (w) toast(w); }
+  renderPage();
+}
+async function copyPrev() {
+  const P = S.plan; if (!P) return;
+  const prev = addDays(P.week, -7);
+  toast('Copio la settimana prima…');
+  try {
+    const out = await queued('programma', { da: prev, a: addDays(prev, 6) });
+    const src = out.squadre || [];
+    if (!src.length) return toast('La settimana prima è vuota');
+    if (P.squadre.length && !confirm('Sostituire il programma di questa settimana con quello della settimana prima?')) return;
+    P.squadre = src.map(s => Object.assign({}, s, { id: uid(), data: addDays(s.data, 7) }));
+    P.dirty = true; renderPage(); toast('Copiata: controlla e salva');
+  } catch (e) { const w = why(e); if (w) toast(w); }
+}
+// Operatori: attivi, ore da contratto, cantiere fisso, nuovi
+async function opsEdit() {
+  let ops = S.plan ? S.plan.operatori : null, sites = S.plan ? S.plan.cantieri : S.cantieri.filter(c => c.attivo !== false);
+  if (!ops) {
+    toast('Carico gli operatori…');
+    try { const w = mondayOf(todayIso()); const out = await queued('programma', { da: w, a: w }); ops = out.operatori || []; sites = (out.cantieri || sites).filter(c => c.attivo !== false); }
+    catch (e) { const w = why(e); if (w) toast(w); return; }
+  }
+  openDlg(`<form id="opsForm" style="display:grid;gap:12px"><h2>Operatori</h2>
+    <p class="sub">Chi è spuntato compare nel programma. Le ore sono quelle settimanali da contratto. Chi ha un cantiere fisso trova subito quello nell'app.</p>
+    <div class="rows">${ops.map((p, i) => `<div style="display:grid;gap:8px;padding:10px 0;border-top:1px solid var(--line-soft)">
+      <div class="row"><label style="display:flex;gap:10px;align-items:center;flex:1;font-weight:600"><input type="checkbox" name="on" value="${i}" ${p.attivo !== false ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--accent)">${esc(p.nome)}</label>
+      <label style="display:flex;gap:6px;align-items:center;font-size:14px"><input name="ore${i}" inputmode="decimal" value="${esc(p.ore || 30)}" aria-label="Ore settimanali di ${esc(p.nome)}" style="width:56px;height:38px;border-radius:10px;border:1px solid #c9ccc2;text-align:center;font-size:16px"> h/sett.</label></div>
+      <select name="fisso${i}" aria-label="Cantiere fisso di ${esc(p.nome)}" style="height:40px;border-radius:12px;border:1px solid #c9ccc2;padding:0 10px;background:#fff;font-size:15px"><option value="">Nessun cantiere fisso (va dove serve)</option>
+      ${sites.map(c => c.nome).concat(p.fisso && !sites.some(c => c.nome === p.fisso) ? [p.fisso] : []).map(n => `<option value="${esc(n)}" ${n === p.fisso ? 'selected' : ''}>Fisso: ${esc(cap(n))}</option>`).join('')}</select></div>`).join('')}</div>
+    <label class="field">Aggiungi operatori (uno per riga)<textarea name="nuovo" placeholder="es. Mario Rossi"></textarea></label>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Salva</button></div></form>`);
+  $('#opsForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target), on = new Set(f.getAll('on').map(Number));
+    const lista = ops.map((p, i) => ({ nome: p.nome, attivo: on.has(i), ore: Number(String(f.get('ore' + i) || '').replace(',', '.')) || 30, fisso: String(f.get('fisso' + i) || '') }));
+    String(f.get('nuovo') || '').split(/[\n,;]+/).map(v => cap(v.trim().replace(/\s+/g, ' '))).filter(Boolean).forEach(n => { if (!lista.some(p => sameName(p.nome, n))) lista.push({ nome: n, attivo: true, ore: 30, fisso: '' }); });
+    dlg.close(); toast('Salvo gli operatori…');
+    try {
+      const out = await queued('operatori', { operatori: lista });
+      if (S.plan) S.plan.operatori = out.operatori || lista;
+      Object.keys(S.cache).filter(k => k.startsWith('p:') || ['interventi', 'scad', 'dpi'].includes(k)).forEach(k => { if (!(S.plan && S.plan.dirty && k === 'p:' + S.plan.week)) delete S.cache[k]; });
+      toast('Operatori salvati');
+    } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  });
+}
+function printDoc(html) {
+  const pa = $('#printArea'); pa.innerHTML = html;
+  document.body.classList.add('printing');
+  setTimeout(() => { window.print(); setTimeout(() => { document.body.classList.remove('printing'); pa.innerHTML = ''; }, 500); }, 150);
+}
+function printPlan() {
+  const P = S.plan; if (!P) return;
+  const days = [...Array(7)].map((_, i) => addDays(P.week, i)), isD = doppiDi(P.squadre);
+  const cell = (d, t) => P.squadre.filter(s => s.data === d && s.turno === t).map(s => `<div><b>${esc(cap(s.cantiere))}</b>: ${s.operatori.map(o => isD(d, o) ? `<span style="color:#b42318;font-weight:700">${esc(o)}</span>` : esc(o)).join(', ')}</div>`).join('');
+  printDoc(`<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GE3CO"><div><h1>Programma della settimana</h1><p>Dal ${fmtIso(P.week)} al ${fmtIso(days[6])}</p></div></div>
+    <table><thead><tr><th>Giorno</th><th>Mattina 06–11</th><th>Pomeriggio 13–18</th><th>Assenze</th></tr></thead><tbody>
+    ${days.map(d => `<tr><td><b>${dayOf(d).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'short' })}</b></td><td>${cell(d, 'Mattina')}</td><td>${cell(d, 'Pomeriggio')}</td><td>${ASSENZE.map(a => cell(d, a) ? `<div><b>${a}</b>: ${P.squadre.filter(s => s.data === d && s.turno === a).map(s => esc(s.operatori.join(', '))).join(', ')}</div>` : '').join('')}</td></tr>`).join('')}
+    </tbody></table><p>In rosso: doppio turno.</p></div>`);
 }
 
 // ---------- Interventi ----------
@@ -479,14 +641,16 @@ function intForm(x) {
     <label class="field">Cosa ritirare<textarea name="cosa">${esc(x.cosa || '')}</textarea></label>
     <label class="field">Note per l'operatore<input name="note" value="${esc(x.note || '')}"></label>
     <label class="field">Assegna a<select name="assegnato">${['Tutti'].concat(ops).map(n => `<option value="${esc(n)}" ${sameName(n, x.assegnato) ? 'selected' : ''}>${n === 'Tutti' ? 'Tutti gli operatori' : esc(n)}</option>`).join('')}</select></label>
-    <p class="sub">Lo screenshot della segnalazione si allega dall'app Timbra Cantieri.</p>
+    <label class="field">Screenshot della segnalazione${x.screenshot ? ' (già allegato: scegline uno per sostituirlo)' : ' (facoltativo)'}<input type="file" name="shot" accept="image/*" style="height:auto;padding:10px"></label>
     <div class="actions">${x.id ? '<button type="button" class="btn plain" data-delint="' + esc(x.id) + '">Elimina</button>' : ''}<button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Salva</button></div></form>`);
   $('#intForm').addEventListener('submit', e => {
     e.preventDefault();
     const f = new FormData(e.target);
     const y = Object.assign(intPayload(x), Object.fromEntries(['indirizzo', 'localita', 'data', 'cliente', 'cosa', 'note', 'assegnato'].map(k => [k, String(f.get(k) || '').trim()])));
     if (!x.id) delete y.id;
-    dlg.close(); toast('Salvo l\'intervento…'); saveInt(y, x.id ? 'Intervento aggiornato' : 'Intervento creato');
+    const file = f.get('shot');
+    const go2 = () => { dlg.close(); toast('Salvo l\'intervento…'); saveInt(y, x.id ? 'Intervento aggiornato' : 'Intervento creato'); };
+    if (file && file.size) compressImage(file).then(d => { y.screenshot = d; go2(); }, err => toast(err.message)); else go2();
   });
 }
 async function showFoto(id, tipo) {
@@ -542,12 +706,14 @@ function pDpi() {
   const stChip = r => r.st === 'over' ? chip('no', `Scaduto da ${-r.g} g`) : r.st === 'under' ? chip('wait', r.g === 0 ? 'Scade oggi' : `Scade tra ${r.g} g`) : r.st === 'ok' ? chip('ok', 'In regola') : chip('grey', 'Senza scadenza');
   const ordine = {};
   righe.filter(r => r.st === 'over' || r.st === 'under').forEach(r => { const k = r.capo + (r.taglia ? ' · ' + r.taglia : ''); ordine[k] = (ordine[k] || 0) + (r.qta || 1); });
-  return head(`<a class="btn ghost" href="${APP_URL}" target="_blank" rel="noopener">Registra una consegna</a>`) + `<div class="grid" style="gap:16px">
+  if (!Array.isArray(d.capi)) return head() + errBox('Per usare DPI e vestiario va aggiornato lo script Google (guida nel repository).');
+  return head(`<button class="btn" data-act="dpiNew">${icon('plus')}Nuova consegna</button><button class="btn ghost" data-act="capi">Capi e durata</button><button class="btn plain" data-act="printScheda">Scheda da firmare</button>`) + `<div class="grid" style="gap:16px">
     <div class="table-box"><table><thead><tr><th>Operatore</th><th>Capo</th><th>Taglia</th><th>Consegnato</th><th>Scadenza</th><th>Stato</th></tr></thead><tbody>
-    ${righe.map(r => `<tr><td class="name">${esc(r.operatore)}</td><td>${esc(r.capo)}</td><td>${esc(r.taglia || '—')}</td><td>${fmtIso(r.data)}</td><td>${fmtIso(r.scadenza)}</td><td>${stChip(r)}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Nessuna consegna registrata.</td></tr>'}
+    ${righe.map(r => `<tr data-dedit="${esc(r.id)}"><td class="name"><button class="link" data-dedit="${esc(r.id)}" style="color:var(--ink);text-decoration:none">${esc(r.operatore)}</button></td><td>${esc(r.capo)}</td><td>${esc(r.taglia || '—')}</td><td>${fmtIso(r.data)}</td><td>${fmtIso(r.scadenza)}</td><td>${stChip(r)}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Nessuna consegna registrata.</td></tr>'}
     </tbody></table></div>
     <article class="card"><h2>Da ordinare</h2><p class="sub">Capi scaduti o in scadenza nei prossimi ${FINESTRA_SCAD} giorni</p>
-      ${Object.keys(ordine).length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px">${Object.entries(ordine).map(([k, n]) => `<li>${n} × ${esc(k)}</li>`).join('')}</ul>` : '<p class="empty">Niente da ordinare. ✓</p>'}</article></div>`;
+      ${Object.keys(ordine).length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px">${Object.entries(ordine).map(([k, n]) => `<li>${n} × ${esc(k)}</li>`).join('')}</ul><button class="btn ghost" data-act="printOrder">Stampa per il fornitore</button>` : '<p class="empty">Niente da ordinare. ✓</p>'}
+      <p class="sub">Tocca una riga della tabella per modificare o eliminare la consegna.</p></article></div>`;
 }
 
 // ---------- Statistiche ----------
@@ -599,21 +765,21 @@ function pDipendenti() {
   if (!sc || sc.error) return head() + (sc && sc.error ? errBox(sc.error) : loadingBox());
   if (!Array.isArray(sc.voci)) return head() + errBox('Per visite e corsi va aggiornato lo script Google (guida nel repository).');
   const ult = scUltime(sc);
-  const voci = sc.voci.filter(v => v.attiva && ult.some(r => sameName(r.voce, v.nome))).map(v => v.nome);
+  const voci = sc.voci.filter(v => v.attiva).map(v => v.nome);
   const ops = (sc.operatori || []).filter(o => o.attivo !== false).map(o => o.nome).filter(n => match(n));
   const vic = scVicine(sc).filter(r => match(r.operatore, r.voce));
   const cell = (op, voce) => {
     const r = ult.find(x => sameName(x.operatore, op) && sameName(x.voce, voce));
-    if (!r) return '<span class="small" style="color:#9a9a96">—</span>';
+    if (!r) return `<button data-screg="${esc(op)}|${esc(voce)}" aria-label="Registra ${esc(voce)} per ${esc(op)}" style="color:#9a9a96">+ registra</button>`;
     const g = daysTo(r.scadenza);
     const cls = g === null ? '' : g < 0 ? 'no' : g <= FINESTRA_SCAD ? 'wait' : '';
-    return cls ? chip(cls, fmtIso(r.scadenza)) : `${fmtIso(r.scadenza)}`;
+    return `<button data-scedit="${esc(r.id)}" aria-label="Modifica ${esc(voce)} di ${esc(op)}">${cls ? chip(cls, fmtIso(r.scadenza)) : r.scadenza ? fmtIso(r.scadenza) : 'fatto ' + fmtIso(r.fatto)}</button>`;
   };
-  return head(`<a class="btn ghost" href="${APP_URL}" target="_blank" rel="noopener">Registra visita o corso</a>`) +
+  return head(`<button class="btn" data-act="scNew">${icon('plus')}Registra visita o corso</button><button class="btn ghost" data-act="scVoci">Visite, corsi e durata</button><button class="btn plain" data-act="ops">${icon('dipendenti')}Operatori</button>`) +
     `<article class="card"><div class="card-head"><h2>In scadenza</h2><small>scaduti e nei prossimi ${FINESTRA_SCAD} giorni</small></div>
-    <div class="rows">${vic.map(r => `<div class="row"><div class="ini c${daysTo(r.scadenza) < 0 ? 3 : 0}" aria-hidden="true">${esc(initials(r.operatore))}</div><div class="txt"><b>${esc(r.operatore)}</b><span>${esc(r.voce)} · ${fmtIso(r.scadenza)}</span></div>${chip(daysTo(r.scadenza) < 0 ? 'no' : 'wait', scTxt(r))}</div>`).join('') || '<p class="empty">Niente in scadenza. ✓</p>'}</div></article>
+    <div class="rows">${vic.map(r => `<div class="row"><div class="ini c${daysTo(r.scadenza) < 0 ? 3 : 0}" aria-hidden="true">${esc(initials(r.operatore))}</div><div class="txt"><b>${esc(r.operatore)}</b><span>${esc(r.voce)} · ${fmtIso(r.scadenza)}</span></div>${chip(daysTo(r.scadenza) < 0 ? 'no' : 'wait', scTxt(r))}<button class="btn plain sm" data-screg="${esc(r.operatore)}|${esc(r.voce)}">Rinnova</button></div>`).join('') || '<p class="empty">Niente in scadenza. ✓</p>'}</div></article>
     <div class="table-box"><table><thead><tr><th>Dipendente</th>${voci.map(v => `<th>${esc(v.length > 22 ? v.slice(0, 20) + '…' : v)}</th>`).join('')}</tr></thead><tbody>
-    ${ops.map(o => `<tr><td class="name">${esc(o)}</td>${voci.map(v => `<td>${cell(o, v)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${voci.length + 1}" class="empty">Nessun dipendente.</td></tr>`}
+    ${ops.map(o => `<tr><td class="name">${esc(o)}</td>${voci.map(v => `<td class="cellbtn">${cell(o, v)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${voci.length + 1}" class="empty">Nessun dipendente.</td></tr>`}
     </tbody></table></div>`;
 }
 
@@ -626,8 +792,18 @@ function pImpostazioni() {
       <form id="pwdForm" style="display:grid;gap:10px"><label class="field">Nuova password<input type="password" name="p1" minlength="6" required autocomplete="new-password"></label>
       <label class="field">Ripeti<input type="password" name="p2" minlength="6" required autocomplete="new-password"></label><button class="btn ghost" type="submit">Cambia password</button></form></article>
     <article class="card"><h2>Sull'iPhone</h2><p class="sub">Apri questa pagina in Safari, tocca <b>Condividi</b> e poi <b>Aggiungi alla schermata Home</b>: si apre a tutto schermo come un'app. Per sicurezza la password va reinserita ogni volta che la riapri.</p></article>
-    <article class="card"><h2>App degli operatori</h2><p class="sub">Cantieri, sede, programma, consegne DPI e correzioni delle timbrature si gestiscono ancora dall'app Timbra Cantieri (5 tocchi sul logo per l'area responsabile).</p>
-      <a class="btn ghost" href="${APP_URL}" target="_blank" rel="noopener">Apri Timbra Cantieri</a></article></div>`;
+    <article class="card"><h2>Cantieri</h2><p class="sub">${S.cantieri.filter(c => c.attivo !== false).length} attivi su ${S.cantieri.length}: ${esc(S.cantieri.filter(c => c.attivo !== false).map(c => cap(c.nome)).join(', '))}</p>
+      <button class="btn ghost" data-act="sites">Aggiungi, rinomina, colori</button></article>
+    <article class="card"><h2>Sede per le timbrature</h2>${sedeTxt()}<button class="btn ghost" data-act="sede">Cambia sede o raggio</button></article>
+    <article class="card"><h2>Operatori</h2><p class="sub">Chi compare nel programma, ore settimanali da contratto e cantiere fisso.</p><button class="btn ghost" data-act="ops">${icon('dipendenti')}Gestisci operatori</button></article>
+    <article class="card"><h2>App degli operatori</h2><p class="sub">Le timbrature si fanno dall'app Timbra Cantieri sul telefono di ogni operatore. Azzerare tutto il registro si fa ancora da lì.</p>
+      <a class="btn plain" href="${APP_URL}" target="_blank" rel="noopener">Apri Timbra Cantieri</a></article></div>`;
+}
+function sedeTxt() {
+  const s = needSede();
+  if (s === undefined) return '<p class="sub">Carico la sede…</p>';
+  if (s.error) return `<p class="sub">⚠️ ${esc(s.error)}</p>`;
+  return isFinite(s.lat) ? `<p class="sub">Si timbra entro <b style="color:var(--ink)">${s.raggio} m</b> dalla sede. <a href="https://maps.google.com/?q=${s.lat},${s.lng}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:700">Vedi sulla mappa</a></p>` : '<p class="sub">Sede non ancora impostata.</p>';
 }
 async function invite() {
   openDlg(`<h2>Link di invito</h2><p class="loading" id="invBox">Preparo il link…</p><div class="actions"><button class="btn plain" data-act="close">Chiudi</button></div>`);
@@ -643,6 +819,271 @@ async function invite() {
   } catch (e) { const box = $('#invBox'); if (box) box.textContent = why(e); }
 }
 
+// ---------- Modifiche: timbrature ----------
+const toLocalInput = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const sel = (name, opts, cur, extra) => `<select name="${name}" ${extra || ''}>${opts.map(o => { const [v, l] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(v)}" ${String(v) === String(cur) ? 'selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`;
+function tEdit(id) {
+  const m = S.month || monthNow(), list = S.cache[tKey(m)];
+  const t = Array.isArray(list) && list.find(x => x.id === id); if (!t) return;
+  const names = S.cantieri.map(c => c.nome); if (!names.includes(t.cantiere)) names.unshift(t.cantiere);
+  openDlg(`<form id="tForm" style="display:grid;gap:12px"><h2>${esc(t.dip)}</h2><p class="sub">${fmtDay(t.start)}${t.sede ? ' · ' + esc(cap(t.sede)) : ''}</p>
+    <label class="field">Cantiere${sel('cantiere', names.map(n => [n, cap(n)]), t.cantiere)}</label>
+    <label class="field">Entrata<input type="datetime-local" name="start" required value="${toLocalInput(t.start)}"></label>
+    <label class="field">Uscita<input type="datetime-local" name="end" value="${t.end ? toLocalInput(t.end) : ''}"></label>
+    <div class="actions" style="justify-content:flex-start">${isMap(t.posIn) ? `<a class="btn plain sm" href="${esc(t.posIn.split(' ')[0])}" target="_blank" rel="noopener">Entrata sulla mappa</a>` : ''}${isMap(t.posOut) ? `<a class="btn plain sm" href="${esc(t.posOut.split(' ')[0])}" target="_blank" rel="noopener">Uscita sulla mappa</a>` : ''}</div>
+    <div class="actions"><button type="button" class="btn plain" id="tDel" style="color:#a61b1b">Elimina</button><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Salva</button></div></form>`);
+  const done = msg => { invalidate(tKey(m), tKey(monthNow()), 'extra'); toast(msg); renderPage(); };
+  $('#tForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target), start = new Date(f.get('start')).getTime(), ev = f.get('end'), end = ev ? new Date(ev).getTime() : null;
+    if (!start) return toast('Indica l\'entrata');
+    if (end !== null && !(end > start)) return toast('L\'uscita deve essere dopo l\'entrata');
+    dlg.close(); toast('Salvo…');
+    try { await queued('modifica', { t: { id, start, end, cantiere: String(f.get('cantiere')) } }); done('Timbratura modificata'); } catch (err) { const w = why(err); if (w) toast(w); }
+  });
+  $('#tDel').addEventListener('click', async () => {
+    if (!confirm(`Eliminare la timbratura di ${t.dip} del ${fmtDay(t.start)}?`)) return;
+    dlg.close();
+    try { await queued('elimina', { id }); done('Timbratura eliminata'); } catch (err) { const w = why(err); if (w) toast(w); }
+  });
+}
+
+// ---------- Modifiche: cantieri e sede ----------
+const SITE_COLORS = ['#dc2626', '#ea580c', '#ca8a04', '#65a30d', '#16a34a', '#0d9488', '#0891b2', '#2563eb', '#4f46e5', '#7c3aed', '#c026d3', '#db2777', '#78716c', '#1f2937'];
+function sitesEdit() {
+  const row = (c, i) => `<div class="check" data-siterow><input type="color" name="c${i}" value="${esc(c.colore || SITE_COLORS[i % SITE_COLORS.length])}" aria-label="Colore" style="width:42px;height:36px;border:0;background:none;padding:0">
+    <input name="n${i}" value="${esc(c.nome)}" maxlength="60" placeholder="Nome cantiere" aria-label="Nome cantiere" style="flex:1;min-width:0;height:40px;border-radius:10px;border:1px solid #c9ccc2;padding:0 10px;font-size:16px">
+    <label style="display:flex;gap:6px;align-items:center;font-size:14px"><input type="checkbox" name="a${i}" ${c.attivo !== false ? 'checked' : ''}>Attivo</label></div>`;
+  openDlg(`<form id="siteForm" style="display:grid;gap:12px"><h2>Cantieri</h2>
+    <p class="sub">Togli la spunta per nascondere un cantiere (le timbrature restano). Per eliminarlo svuota il nome. Arrivano su tutti i telefoni alla prossima apertura dell'app.</p>
+    <div class="checks" id="siteList">${S.cantieri.map(row).join('')}</div>
+    <button type="button" class="btn plain" id="siteAdd">+ Aggiungi cantiere</button>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Salva</button></div></form>`);
+  $('#siteAdd').addEventListener('click', () => { const i = $('#siteList').children.length; $('#siteList').insertAdjacentHTML('beforeend', row({ nome: '', attivo: true }, i)); $('#siteList').lastElementChild.querySelector('input[name^="n"]').focus(); });
+  $('#siteForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target), n = $('#siteList').children.length, cantieri = [];
+    for (let i = 0; i < n; i++) { const nome = String(f.get('n' + i) || '').trim(); if (nome) cantieri.push({ nome, attivo: f.get('a' + i) === 'on', colore: String(f.get('c' + i) || '') }); }
+    dlg.close(); toast('Salvo i cantieri…');
+    try {
+      const out = await queued('salva', { cantieri });
+      S.cantieri = out.cantieri || cantieri;
+      if (S.plan && !S.plan.dirty) S.plan = null;
+      Object.keys(S.cache).filter(k => k.startsWith('p:')).forEach(k => delete S.cache[k]);
+      toast('Cantieri salvati');
+    } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  });
+}
+function needSede() {
+  if ('sede' in S.cache || S.loading.sede) return S.cache.sede;
+  S.loading.sede = true;
+  const p = S.demo ? Promise.resolve({ lat: 43.7080, lng: 10.4210, raggio: 200 }) : queued('codice').then(o => withTimeout(fetch(`${ENDPOINT}?azione=cantieri&codice=${encodeURIComponent(o.codice || '')}`), 30000)).then(r => r.json()).then(j => (j.config && j.config.sede) || {});
+  p.then(s => { S.cache.sede = s || {}; }, e => { S.cache.sede = { error: why(e) }; }).finally(() => { delete S.loading.sede; renderPage(); });
+  return undefined;
+}
+function sedeEdit() {
+  const s = S.cache.sede || {};
+  openDlg(`<form id="sedeForm" style="display:grid;gap:12px"><h2>Sede per le timbrature</h2>
+    <p class="sub">Entrata e uscita si timbrano solo entro il raggio da questo punto (gli impianti Ecofor Service ed Ecoacciai hanno la loro zona).</p>
+    ${isFinite(s.lat) ? `<a class="btn plain" href="https://maps.google.com/?q=${s.lat},${s.lng}" target="_blank" rel="noopener">Vedi la sede sulla mappa</a>` : '<p class="empty">Sede non ancora impostata.</p>'}
+    <label class="field">Raggio${sel('raggio', [100, 150, 200, 300, 500].map(r => [r, r + ' metri']), s.raggio || 200)}</label>
+    <p class="sub">Per centrare la sede con precisione premi il pulsante mentre sei in ufficio.</p>
+    <button type="button" class="btn" id="sedeHere">Usa la mia posizione attuale</button>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button>${isFinite(s.lat) ? '<button class="btn ghost" type="submit">Salva solo il raggio</button>' : ''}</div></form>`);
+  const save = async (lat, lng) => {
+    const raggio = Number(new FormData($('#sedeForm')).get('raggio'));
+    dlg.close(); toast('Salvo la sede…');
+    try { const out = await queued('sede', { sede: { lat, lng, raggio } }); S.cache.sede = out.sede || { lat, lng, raggio }; toast('Sede salvata'); } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  };
+  $('#sedeForm').addEventListener('submit', e => { e.preventDefault(); save(s.lat, s.lng); });
+  $('#sedeHere').addEventListener('click', e => {
+    if (!navigator.geolocation) return toast('Posizione non disponibile su questo dispositivo');
+    e.target.disabled = true; e.target.textContent = 'Rilevo la posizione…';
+    navigator.geolocation.getCurrentPosition(p => {
+      if (p.coords.accuracy > 100) { e.target.disabled = false; e.target.textContent = 'Usa la mia posizione attuale'; return toast(`Segnale GPS poco preciso (±${Math.round(p.coords.accuracy)} m): riprova vicino a una finestra`); }
+      save(p.coords.latitude, p.coords.longitude);
+    }, err => { e.target.disabled = false; e.target.textContent = 'Usa la mia posizione attuale'; toast('Posizione non disponibile: ' + err.message); }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+  });
+}
+
+// ---------- Modifiche: DPI ----------
+const TAGLIA_LBL = { maglia: 'Maglia', pantalone: 'Pantalone', scarpe: 'Scarpe' };
+const mesiTxt = m => !m ? 'senza scadenza' : m % 12 === 0 ? `ogni ${m / 12 === 1 ? 'anno' : m / 12 + ' anni'}` : `ogni ${m} mesi`;
+const dpiPeople = d => (d.operatori || []).filter(o => o.attivo !== false).map(o => o.nome);
+const taglieDi = (d, n) => (d.taglie || {})[String(n).trim().toLowerCase()] || { maglia: '', pantalone: '', scarpe: '', note: '' };
+function dpiNew(nome) {
+  const d = S.cache.dpi; if (!d || d.error) return;
+  const people = dpiPeople(d), capi = (d.capi || []).filter(c => c.attivo), cur = nome || people[0] || '';
+  if (!capi.length) return toast('Prima aggiungi i capi da "Capi e durata"');
+  const t = taglieDi(d, cur);
+  openDlg(`<form id="dpiForm" style="display:grid;gap:12px"><h2>Nuova consegna</h2>
+    <div class="grid g-2" style="gap:12px"><label class="field">Operatore${sel('op', people, cur, 'id="dpiOp"')}</label><label class="field">Data<input type="date" name="data" value="${todayIso()}"></label></div>
+    <p class="sub">Spunta i capi consegnati. La taglia salvata per l'operatore si aggiorna se la cambi.</p>
+    <div class="checks">${capi.map((c, i) => `<label class="check"><input type="checkbox" name="c${i}"><span>${esc(c.nome)}<em>${mesiTxt(c.mesi)}</em></span>
+      ${c.taglia ? `<input class="mini" name="t${i}" data-tipo="${c.taglia}" value="${esc(t[c.taglia] || '')}" placeholder="${TAGLIA_LBL[c.taglia]}" aria-label="Taglia ${esc(c.nome)}">` : ''}
+      <input class="mini" name="q${i}" inputmode="numeric" value="1" aria-label="Quantità ${esc(c.nome)}"></label>`).join('')}</div>
+    <label class="field">Note (facoltative)<input name="note" maxlength="200" placeholder="es. sostituzione per usura"></label>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Registra</button></div></form>`);
+  $('#dpiOp').addEventListener('change', e => { const tt = taglieDi(d, e.target.value); document.querySelectorAll('#dpiForm [data-tipo]').forEach(i => { i.value = tt[i.dataset.tipo] || ''; }); });
+  $('#dpiForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target), op = String(f.get('op') || ''), righe = [], taglie = Object.assign({}, taglieDi(d, op));
+    capi.forEach((c, i) => { const tg = String(f.get('t' + i) || '').trim(); if (c.taglia && tg) taglie[c.taglia] = tg; if (f.get('c' + i)) righe.push({ capo: c.nome, taglia: tg, qta: Number(f.get('q' + i)) || 1 }); });
+    if (!op || !righe.length) return toast('Scegli l\'operatore e almeno un capo');
+    dlg.close(); toast('Registro la consegna…');
+    try { S.cache.dpi = await queued('dpiconsegna', { consegna: { id: uid(), data: String(f.get('data') || todayIso()), operatore: op, righe, note: String(f.get('note') || '').trim(), taglie } }); toast(`Consegna registrata (${righe.length} ${righe.length === 1 ? 'capo' : 'capi'})`); }
+    catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  });
+}
+function dpiEdit(id) {
+  const d = S.cache.dpi; const c = d && d.consegne && d.consegne.find(x => x.id === id); if (!c) return;
+  const capi = (d.capi || []).filter(x => x.attivo || x.nome === c.capo).map(x => x.nome); if (!capi.includes(c.capo)) capi.unshift(c.capo);
+  openDlg(`<form id="dpiEd" style="display:grid;gap:12px"><h2>Modifica consegna</h2><p class="sub">${esc(c.operatore)}</p>
+    <label class="field">Capo${sel('capo', capi, c.capo)}</label>
+    <label class="field">Data di consegna<input type="date" name="data" required value="${esc(c.data)}"></label>
+    <div class="grid g-2" style="gap:12px"><label class="field">Taglia<input name="taglia" maxlength="10" value="${esc(c.taglia || '')}"></label><label class="field">Quantità<input name="qta" inputmode="numeric" value="${c.qta || 1}"></label></div>
+    <label class="field">Note<input name="note" maxlength="200" value="${esc(c.note || '')}"></label>
+    <p class="sub">La scadenza si ricalcola dalla data e dalla durata del capo.</p>
+    <div class="actions"><button type="button" class="btn plain" id="dpiDel" style="color:#a61b1b">Elimina</button><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Salva</button></div></form>`);
+  $('#dpiDel').addEventListener('click', async () => {
+    if (!confirm(`Eliminare la consegna di ${c.capo} del ${fmtIso(c.data)}?`)) return;
+    dlg.close();
+    try { S.cache.dpi = await queued('dpielimina', { id: c.id }); toast('Consegna eliminata'); } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  });
+  $('#dpiEd').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const nuova = { id: uid(), data: String(f.get('data') || c.data), operatore: c.operatore, note: String(f.get('note') || '').trim(), righe: [{ capo: String(f.get('capo') || c.capo), taglia: String(f.get('taglia') || '').trim(), qta: Number(f.get('qta')) || 1 }] };
+    dlg.close(); toast('Salvo la modifica…');
+    try { await queued('dpielimina', { id: c.id }); S.cache.dpi = await queued('dpiconsegna', { consegna: nuova }); toast('Consegna modificata'); } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  });
+}
+function capiEdit() {
+  const d = S.cache.dpi; if (!d || d.error) return;
+  const capi = d.capi || [];
+  openDlg(`<form id="capiForm" style="display:grid;gap:12px"><h2>Capi e durata</h2>
+    <p class="sub">Ogni quanti mesi si sostituisce un capo (0 = nessuna scadenza). Togli la spunta per non usarlo più.</p>
+    <div class="checks">${capi.map((c, i) => `<label class="check"><input type="checkbox" name="a${i}" ${c.attivo ? 'checked' : ''}><span>${esc(c.nome)}${c.taglia ? `<em>taglia: ${TAGLIA_LBL[c.taglia]}</em>` : ''}</span><input class="mini" name="m${i}" inputmode="numeric" value="${c.mesi}" aria-label="Mesi ${esc(c.nome)}"> mesi</label>`).join('')}</div>
+    <div class="grid g-2" style="gap:12px"><label class="field">Aggiungi un capo<input name="nuovo" maxlength="60" placeholder="es. Tappi antirumore"></label>
+    <label class="field">Con taglia${sel('taglia', [['', 'Nessuna'], ['maglia', 'Maglia'], ['pantalone', 'Pantalone'], ['scarpe', 'Scarpe']], '')}</label></div>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Salva</button></div></form>`);
+  $('#capiForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const lista = capi.map((c, i) => ({ nome: c.nome, taglia: c.taglia, mesi: Number(f.get('m' + i)) || 0, attivo: !!f.get('a' + i) }));
+    const nuovo = String(f.get('nuovo') || '').trim();
+    if (nuovo && !lista.some(c => sameName(c.nome, nuovo))) lista.push({ nome: nuovo.charAt(0).toUpperCase() + nuovo.slice(1), taglia: String(f.get('taglia') || ''), mesi: 12, attivo: true });
+    dlg.close(); toast('Salvo i capi…');
+    try { S.cache.dpi = await queued('dpicapi', { capi: lista }); toast('Capi salvati'); } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  });
+}
+function dpiScadute(d) {
+  const ops = new Set(dpiPeople(d).map(n => n.toLowerCase())), last = {};
+  (d.consegne || []).forEach(c => { const k = c.operatore.toLowerCase() + '|' + c.capo.toLowerCase(); if (!last[k] || last[k].data < c.data) last[k] = c; });
+  return Object.values(last).filter(c => (!ops.size || ops.has(c.operatore.toLowerCase())) && c.scadenza && daysTo(c.scadenza) <= FINESTRA_SCAD);
+}
+function printOrder() {
+  const d = S.cache.dpi; if (!d || d.error) return;
+  const m = {};
+  dpiScadute(d).forEach(c => { const tg = c.taglia || '—', k = c.capo + '|' + tg; (m[k] = m[k] || { capo: c.capo, taglia: tg, qta: 0, chi: [] }); m[k].qta += c.qta || 1; m[k].chi.push(c.operatore); });
+  const rows = Object.values(m).sort((a, b) => a.capo.localeCompare(b.capo));
+  printDoc(`<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GE3CO"><div><h1>DPI e vestiario da ordinare</h1><p>Aggiornato al ${fmtIso(todayIso())}</p></div></div>
+    <table><thead><tr><th>Capo</th><th>Taglia</th><th>Quantità</th><th>Per</th></tr></thead><tbody>${rows.map(r => `<tr><td>${esc(r.capo)}</td><td>${esc(r.taglia)}</td><td><b>${r.qta}</b></td><td>${r.chi.map(esc).join(', ')}</td></tr>`).join('') || '<tr><td colspan="4">Niente da ordinare.</td></tr>'}</tbody></table></div>`);
+}
+function printScheda() {
+  const d = S.cache.dpi; if (!d || d.error) return;
+  openDlg(`<form id="schForm" style="display:grid;gap:12px"><h2>Scheda consegna da firmare</h2><label class="field">Operatore${sel('op', dpiPeople(d), '')}</label>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Stampa o salva PDF</button></div></form>`);
+  $('#schForm').addEventListener('submit', e => {
+    e.preventDefault();
+    const nome = String(new FormData(e.target).get('op')), t = taglieDi(d, nome);
+    const cons = (d.consegne || []).filter(c => sameName(c.operatore, nome)).sort((a, b) => a.data.localeCompare(b.data));
+    dlg.close();
+    printDoc(`<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GE3CO"><div><h1>Scheda consegna DPI e vestiario</h1>
+      <p>Operatore: <b>${esc(nome)}</b> · Taglie: maglia ${esc(t.maglia || '—')}, pantalone ${esc(t.pantalone || '—')}, scarpe ${esc(t.scarpe || '—')}</p></div></div>
+      <table><thead><tr><th>Data</th><th>Capo / DPI</th><th>Taglia</th><th>Q.tà</th><th>Scadenza</th><th style="width:22%">Firma operatore</th></tr></thead>
+      <tbody>${cons.map(c => `<tr><td>${fmtIso(c.data)}</td><td>${esc(c.capo)}</td><td>${esc(c.taglia || '')}</td><td>${c.qta}</td><td>${c.scadenza ? fmtIso(c.scadenza) : ''}</td><td style="height:26px"></td></tr>`).join('') || '<tr><td colspan="6">Nessuna consegna registrata.</td></tr>'}</tbody></table>
+      <p>Il lavoratore dichiara di aver ricevuto i dispositivi sopra indicati e si impegna a utilizzarli correttamente e a conservarli con cura (D.Lgs. 81/2008, art. 20 e 78).</p>
+      <p style="margin-top:22px">Data ________________ &nbsp; Firma del lavoratore ______________________ &nbsp; Firma del responsabile ______________________</p></div>`);
+  });
+}
+
+// ---------- Modifiche: visite e corsi ----------
+function scReg(pre) {
+  const sc = S.cache.scad; if (!sc || !Array.isArray(sc.voci)) return;
+  const people = (sc.operatori || []).filter(o => o.attivo !== false).map(o => o.nome);
+  const voci = sc.voci.filter(v => v.attiva || (pre && v.nome === pre.voce));
+  const p = Object.assign({ operatore: people[0] || '', voce: (voci[0] || {}).nome || '', fatto: todayIso(), scadenza: '', note: '' }, pre || {});
+  const cats = [...new Set(voci.map(v => v.cat))];
+  openDlg(`<form id="scForm" style="display:grid;gap:12px"><h2>${p.id ? 'Modifica' : 'Registra visita o corso'}</h2>
+    <label class="field">Operatore${sel('op', people.concat(p.operatore && !people.includes(p.operatore) ? [p.operatore] : []), p.operatore)}</label>
+    <label class="field">Visita o corso<select name="voce" id="scVoce">${cats.map(c => `<optgroup label="${esc(c)}">${voci.filter(v => v.cat === c).map(v => `<option value="${esc(v.nome)}" data-mesi="${v.mesi}" ${v.nome === p.voce ? 'selected' : ''}>${esc(v.nome)}</option>`).join('')}</optgroup>`).join('')}</select></label>
+    <div class="grid g-2" style="gap:12px"><label class="field">Fatto il<input type="date" name="fatto" id="scFatto" required value="${esc(p.fatto)}"></label>
+    <label class="field">Scade il<input type="date" name="scad" id="scScad" value="${esc(p.scadenza)}"></label></div>
+    <p class="sub" id="scHint"></p>
+    <label class="field">Note (niente dati sanitari)<input name="note" maxlength="200" value="${esc(p.note)}" placeholder="es. ente del corso, attestato in ufficio"></label>
+    <div class="actions">${p.id ? '<button type="button" class="btn plain" id="scDel" style="color:#a61b1b">Elimina</button>' : ''}<button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Salva</button></div></form>`);
+  const calc = () => {
+    const o = $('#scVoce').selectedOptions[0], m = Number(o && o.dataset.mesi) || 0, f = $('#scFatto').value;
+    if (!f) return;
+    if (!m) { $('#scHint').textContent = 'Questa voce non ha scadenza: lascia vuoto o scrivi una data.'; return; }
+    const d = dayOf(f); d.setMonth(d.getMonth() + m); $('#scScad').value = isoOf(d);
+    $('#scHint').textContent = `Calcolata: ${fmtIso(isoOf(d))} (ogni ${m} mesi). Si può cambiare.`;
+  };
+  $('#scVoce').addEventListener('change', calc); $('#scFatto').addEventListener('change', calc);
+  if (!p.scadenza) calc();
+  const del = $('#scDel');
+  if (del) del.addEventListener('click', async () => {
+    if (!confirm('Eliminare questa registrazione?')) return;
+    dlg.close();
+    try { S.cache.scad = await queued('scadelimina', { id: p.id }); toast('Eliminata'); } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  });
+  $('#scForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const reg = { id: p.id || uid(), operatore: String(f.get('op') || ''), voce: String(f.get('voce') || ''), fatto: String(f.get('fatto') || ''), scadenza: String(f.get('scad') || ''), note: String(f.get('note') || '').trim() };
+    if (!reg.operatore || !reg.voce || !reg.fatto) return toast('Servono operatore, voce e data');
+    dlg.close(); toast('Salvo…');
+    try { S.cache.scad = await queued('scadreg', { reg }); toast('Registrato'); } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  });
+}
+function scVociEdit() {
+  const sc = S.cache.scad; if (!sc || !Array.isArray(sc.voci)) return;
+  openDlg(`<form id="vociForm" style="display:grid;gap:12px"><h2>Visite, corsi e durata</h2>
+    <p class="sub">Ogni quanti mesi si rinnova ogni voce (0 = nessuna scadenza). Confermate le durate con RSPP e medico competente.</p>
+    <div class="checks">${sc.voci.map((v, i) => `<label class="check"><input type="checkbox" name="a${i}" ${v.attiva ? 'checked' : ''}><span>${esc(v.nome)}<em>${esc(v.cat)}</em></span><input class="mini" name="m${i}" inputmode="numeric" value="${v.mesi}" aria-label="Mesi ${esc(v.nome)}"> mesi</label>`).join('')}</div>
+    <div class="grid g-2" style="gap:12px"><label class="field">Aggiungi una voce<input name="nuovo" maxlength="80" placeholder="es. Spazi confinati"></label>
+    <label class="field">Tipo${sel('cat', ['Formazione', 'Sorveglianza sanitaria', 'Abilitazioni', 'Patenti e CQC'], 'Formazione')}</label></div>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Salva</button></div></form>`);
+  $('#vociForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const lista = sc.voci.map((v, i) => ({ nome: v.nome, cat: v.cat, mesi: Number(f.get('m' + i)) || 0, attiva: !!f.get('a' + i) }));
+    const nuovo = String(f.get('nuovo') || '').trim();
+    if (nuovo && !lista.some(v => sameName(v.nome, nuovo))) lista.push({ nome: nuovo.charAt(0).toUpperCase() + nuovo.slice(1), cat: String(f.get('cat') || 'Formazione'), mesi: 12, attiva: true });
+    dlg.close(); toast('Salvo…');
+    try { S.cache.scad = await queued('scadvoci', { voci: lista }); toast('Salvato'); } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  });
+}
+// Foto ridotte (lato lungo max 1280 px, JPEG), come nell'app
+function compressImage(file, max = 1280, q = 0.72) {
+  return new Promise((resolve, reject) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => { const k = Math.min(1, max / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url); resolve(c.toDataURL('image/jpeg', q)); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Foto non leggibile')); };
+    img.src = url;
+  });
+}
+
 // ---------- Finestra, avvisi ----------
 const dlg = $('#dlg');
 function openDlg(html) { $('#dlgBody').innerHTML = html; if (!dlg.open) dlg.showModal(); }
@@ -656,13 +1097,20 @@ function moreMenu() {
 
 // ---------- Eventi ----------
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy]');
+  const el = e.target.closest('[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy]');
   if (!el) return;
   const d = el.dataset;
   if (d.go) return go(d.go);
   if (d.tf) { S.tFilter = d.tf; return renderPage(); }
   if (d.if) { S.iFilter = d.if; return renderPage(); }
-  if (d.week) { S.week = d.week === '0' ? mondayOf(todayIso()) : addDays(S.week, Number(d.week)); return renderPage(); }
+  if (d.week) return changeWeek(d.week === '0' ? mondayOf(todayIso()) : addDays(S.week || mondayOf(todayIso()), Number(d.week)));
+  if (d.tedit) return tEdit(d.tedit);
+  if (d.dedit) return dpiEdit(d.dedit);
+  if (d.screg) { const [op, voce] = d.screg.split('|'); return scReg({ operatore: op, voce }); }
+  if (d.scedit) { const r = S.cache.scad && S.cache.scad.righe.find(x => x.id === d.scedit); return r && scReg(Object.assign({}, r)); }
+  if (d.sq) return sqEdit(d.sq);
+  if (d.addsq) { const [dd, tt] = d.addsq.split('|'); return sqEdit(null, dd, tt); }
+  if (d.assday) return assEdit(d.assday);
   if (d.foto) return showFoto(d.id, d.foto);
   if (d.assign) {
     const x = intById(d.assign), sel = document.querySelector(`[data-assign-sel="${CSS.escape(d.assign)}"]`);
@@ -689,6 +1137,19 @@ document.addEventListener('click', e => {
     case 'close': return dlg.close();
     case 'invite': return invite();
     case 'newInt': if (!S.cache.interventi) needInt(); return intForm(null);
+    case 'sites': return sitesEdit();
+    case 'sede': return sedeEdit();
+    case 'dpiNew': return dpiNew();
+    case 'capi': return capiEdit();
+    case 'printOrder': return printOrder();
+    case 'printScheda': return printScheda();
+    case 'scNew': return scReg();
+    case 'scVoci': return scVociEdit();
+    case 'savePlan': return savePlan(el);
+    case 'undoPlan': if (confirm('Annullare le modifiche non salvate?')) { S.plan = null; renderPage(); } return;
+    case 'copyPrev': return copyPrev();
+    case 'ops': return opsEdit();
+    case 'printPlan': return printPlan();
     case 'email': return queued('email', monthParts(S.month || monthNow())).then(() => toast('Riepilogo inviato per email'), err => toast(why(err)));
   }
 });
@@ -703,6 +1164,7 @@ document.addEventListener('submit', e => {
   if (S.demo) return toast('Nella modalità prova la password non cambia');
   queued('cambiapassword', { nuova: p1 }).then(() => { S.pwd = p1; e.target.reset(); toast('Password cambiata'); }, err => toast(why(err)));
 });
+window.addEventListener('beforeunload', e => { if (S.plan && S.plan.dirty) { e.preventDefault(); e.returnValue = ''; } });
 // Tornando sull'app dopo un po', i dati si ricaricano
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
@@ -712,6 +1174,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- Modalità prova (dati finti, niente rete) ----------
 let DEMO_DB = null;
+const DEMO_SITES = () => (DEMO_DB && DEMO_DB.cantieri) || ['PONTEDERA', 'BIENTINA', 'CASCINA', 'CALCINAIA', 'ECOFOR SERVICE', 'ECOACCIAI'].map((n, i) => ({ nome: n, attivo: true, colore: SITE_COLORS[(i * 3) % SITE_COLORS.length] }));
 function demoBuild() {
   const today = todayIso(), now = Date.now();
   const at = (iso, h, m) => { const d = dayOf(iso); d.setHours(h, m, 0, 0); return d.getTime(); };
@@ -761,7 +1224,8 @@ function demoBuild() {
         { id: 'sv' + i, operatore: o, voce: 'Visita medica', fatto: addDays(today, -340 + i * 40), scadenza: addDays(today, 25 + i * 40), note: '' },
         { id: 'sp' + i, operatore: o, voce: 'Primo soccorso', fatto: addDays(today, -900 + i * 30), scadenza: addDays(today, 195 + i * 30 - (i === 2 ? 300 : 0)), note: '' }]
         .concat(i % 3 === 0 ? [{ id: 'sa' + i, operatore: o, voce: 'Antincendio', fatto: addDays(today, -400), scadenza: addDays(today, 1400), note: '' }] : [])), operatori },
-    dpi: { capi: [], taglie: {}, operatori, consegne: ops.flatMap((o, i) => [
+    dpi: { capi: [{ nome: 'Scarpe S3', taglia: 'scarpe', mesi: 12, attivo: true }, { nome: 'Guanti anti-taglio', taglia: '', mesi: 6, attivo: true }, { nome: 'Giubbotto alta visibilità', taglia: 'maglia', mesi: 24, attivo: true }, { nome: 'Pantaloni alta visibilità', taglia: 'pantalone', mesi: 12, attivo: true }],
+      taglie: { 'mario rossi': { maglia: 'L', pantalone: '50', scarpe: '43', note: '' } }, operatori, consegne: ops.flatMap((o, i) => [
       { id: 'dc' + i, data: addDays(today, -200 - i * 20), operatore: o, capo: 'Scarpe S3', taglia: String(41 + (i % 4)), qta: 1, scadenza: addDays(today, 165 - i * 25), note: '' },
       { id: 'dg' + i, data: addDays(today, -150), operatore: o, capo: 'Guanti anti-taglio', taglia: 'L', qta: 2, scadenza: addDays(today, 30 - i * 6), note: '' }]) }
   };
@@ -771,7 +1235,7 @@ async function demoApi(azione, x) {
   const D = DEMO_DB;
   await new Promise(r => setTimeout(r, 120));
   const ok = o => Object.assign({ ok: true }, o);
-  const cantieri = ['PONTEDERA', 'BIENTINA', 'CASCINA', 'CALCINAIA', 'ECOFOR SERVICE', 'ECOACCIAI'].map(n => ({ nome: n, attivo: true }));
+  const cantieri = DEMO_SITES();
   switch (azione) {
     case 'leggi': return ok({ cantieri, extraInAttesa: D.extra.length, assenzeInAttesa: D.assenze.filter(a => a.stato === 'Da approvare').length });
     case 'timbrature': return ok({ timbrature: D.t.filter(t => { const d = new Date(t.start); return d.getFullYear() === x.anno && d.getMonth() === x.mese; }).sort((a, b) => b.start - a.start), cantieri });
@@ -790,6 +1254,20 @@ async function demoApi(azione, x) {
     case 'riapriintervento': D.interventi.forEach(i => { if (i.id === x.id) { i.stato = 'Da fare'; i.fattoDa = ''; i.fattoIl = null; } }); return ok({ interventi: D.interventi, operatori: D.operatori });
     case 'scad': return ok(D.scad);
     case 'dpi': return ok(D.dpi);
+    case 'modifica': D.t.forEach(t => { if (t.id === x.t.id) Object.assign(t, { start: x.t.start, end: x.t.end, cantiere: x.t.cantiere }); }); return ok({});
+    case 'elimina': D.t = D.t.filter(t => t.id !== x.id); return ok({});
+    case 'salvaprogramma': D.squadre = D.squadre.filter(s => s.data < x.da || s.data > x.a).concat(clone(x.squadre)); return ok({ squadre: D.squadre.filter(s => s.data >= x.da && s.data <= x.a), operatori: D.operatori, cantieri: DEMO_SITES() });
+    case 'operatori': D.operatori = clone(x.operatori); D.scad.operatori = D.operatori; D.dpi.operatori = D.operatori; return ok({ operatori: D.operatori });
+    case 'salva': D.cantieri = x.cantieri.map(c => Object.assign({}, c, { nome: c.nome.toUpperCase() })); return ok({ cantieri: D.cantieri });
+    case 'sede': return ok({ sede: x.sede });
+    case 'dpiconsegna': x.consegna.righe.forEach((r, i) => { const c = D.dpi.capi.find(k => k.nome === r.capo) || { mesi: 0 }; const dd = dayOf(x.consegna.data); dd.setMonth(dd.getMonth() + c.mesi);
+      D.dpi.consegne.unshift({ id: x.consegna.id + '-' + i, data: x.consegna.data, operatore: x.consegna.operatore, capo: r.capo, taglia: r.taglia, qta: r.qta, scadenza: c.mesi ? isoOf(dd) : '', note: x.consegna.note }); });
+      if (x.consegna.taglie) D.dpi.taglie[x.consegna.operatore.toLowerCase()] = x.consegna.taglie; return ok(D.dpi);
+    case 'dpielimina': D.dpi.consegne = D.dpi.consegne.filter(c => c.id !== x.id); return ok(D.dpi);
+    case 'dpicapi': D.dpi.capi = clone(x.capi); return ok(D.dpi);
+    case 'scadreg': D.scad.righe = D.scad.righe.filter(r => r.id !== x.reg.id).concat([Object.assign({}, x.reg)]); return ok(D.scad);
+    case 'scadelimina': D.scad.righe = D.scad.righe.filter(r => r.id !== x.id); return ok(D.scad);
+    case 'scadvoci': D.scad.voci = clone(x.voci); return ok(D.scad);
     case 'codice': return ok({ codice: 'PROVA1234' });
     case 'report': {
       const per = {};

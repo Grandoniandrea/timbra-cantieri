@@ -254,3 +254,56 @@ dialog::backdrop { background: rgba(20, 24, 12, .45); }
 .sheet-nav { display: grid; gap: 6px; }
 .sheet-nav button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px; border: 0; border-radius: 14px; background: #fff; font-weight: 600; text-align: left; font-size: 16px; }
 .sheet-nav svg { width: 20px; height: 20px; flex: none; color: var(--accent); }
+
+/* Programma modificabile */
+.days { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.day { background: #fff; border-radius: 18px; padding: 14px; display: grid; gap: 10px; align-content: start; }
+.day.is-today { box-shadow: inset 0 0 0 2px var(--lime); }
+.day h3 { font: 700 18px/1.1 var(--font-d); text-transform: capitalize; }
+.turno { display: grid; gap: 6px; }
+.turno small { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.sqb { display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: left; border: 1px solid var(--line); background: #fafbf7; border-radius: 12px; padding: 8px 10px; font-size: 14px; line-height: 1.35; min-height: 44px; }
+.sqb:hover { border-color: var(--accent); }
+.sqb i { flex: none; width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; }
+.sqb b { font-weight: 700; }
+.sqb em { display: block; font-size: 12px; color: var(--muted); }
+.sqb.dim { opacity: .35; }
+.doppio { color: #b42318; font-weight: 700; }
+.addsq { border: 1.5px dashed #c9ccc2; background: transparent; border-radius: 12px; min-height: 40px; color: var(--accent); font-weight: 700; font-size: 13px; }
+.assb { border: 0; background: #f4f4f0; border-radius: 12px; min-height: 40px; padding: 8px 10px; text-align: left; font-size: 13px; color: var(--muted); }
+.assb.on { background: #fff4e5; color: #6b3a05; }
+.savebar { position: sticky; top: 8px; z-index: 20; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 8px 10px 8px 16px; }
+.savebar span { margin-right: auto; font-weight: 600; color: var(--muted); font-size: 14px; }
+.savebar.show { background: var(--accent-dark); border-color: var(--accent-dark); }
+.savebar.show span { color: #fff; }
+@media (max-width: 900px) {
+  .days { grid-template-columns: minmax(0, 1fr); }
+  .savebar { position: fixed; top: auto; left: 12px; right: 12px; bottom: calc(max(10px, env(safe-area-inset-bottom)) + 76px); display: none; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+  .savebar.show { display: flex; }
+}
+tr[data-tedit], [data-screg], [data-dedit] { cursor: pointer; }
+tr[data-tedit]:hover td, tr[data-dedit]:hover td { background: #fafbf7; }
+td.cellbtn { padding: 6px; }
+td.cellbtn button { border: 0; background: transparent; padding: 6px; border-radius: 8px; font: inherit; font-size: 14px; min-height: 36px; width: 100%; text-align: left; }
+td.cellbtn button:hover { background: var(--lime-soft); }
+.swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+.checks { display: grid; gap: 8px; }
+.check { display: flex; align-items: center; gap: 10px; background: #fff; border-radius: 12px; padding: 8px 10px; }
+.check input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.check span { flex: 1; font-weight: 600; }
+.check span em { display: block; font-style: normal; font-weight: 400; font-size: 12px; color: var(--muted); }
+.check input.mini { width: 64px; height: 36px; border-radius: 10px; border: 1px solid #c9ccc2; text-align: center; font-size: 16px; }
+
+/* Stampa */
+#printArea { display: none; }
+@media print {
+  body.printing > *:not(#printArea) { display: none !important; }
+  body.printing #printArea { display: block; }
+  .pdoc { font: 11pt/1.35 Arial, sans-serif; color: #000; }
+  .pdoc-h { display: flex; gap: 16px; align-items: center; margin-bottom: 14px; }
+  .pdoc-h img { height: 40px; }
+  .pdoc h1 { font-size: 16pt; margin: 0; }
+  .pdoc table { width: 100%; border-collapse: collapse; }
+  .pdoc th, .pdoc td { border: 1px solid #999; padding: 6px; text-align: left; vertical-align: top; white-space: normal; font-size: 10pt; }
+  @page { margin: 12mm; }
+}
