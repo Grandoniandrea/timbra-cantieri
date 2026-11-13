@@ -42,7 +42,9 @@ const sameName = (a, b) => String(a).trim().toLowerCase() === String(b).trim().t
 const initials = n => String(n).trim().split(/\s+/).slice(0, 2).map(x => x[0] || '').join('').toUpperCase();
 const cap = s => String(s || '').toLowerCase().replace(/(^|[\s/'-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
 const impianto = c => /ECOFOR|ECOACCIAI|ECO ACCIAI/i.test(String(c));
-const oreTurno = c => impianto(c) ? ORE_IMPIANTO : ORE_GEOFOR;
+const isForeco = c => /FORECO/i.test(String(c));
+const ORE_FORECO = 3.5, GIORNI_FORECO = [1, 3, 5]; // lunedì, mercoledì, venerdì
+const oreTurno = c => impianto(c) ? ORE_IMPIANTO : isForeco(c) ? ORE_FORECO : ORE_GEOFOR;
 const daysTo = iso => iso ? Math.round((dayOf(iso) - dayOf(todayIso())) / 864e5) : null;
 const match = (...parts) => !S.q || parts.join(' ').toLowerCase().includes(S.q.toLowerCase());
 const isMap = v => /^https:/.test(String(v || ''));
@@ -325,6 +327,7 @@ function pDashboard() {
     `<p class="foot">Dati dal registro Google di Timbra Cantieri · aggiornati all'apertura · ${S.demo ? 'modalità prova' : 'tocca ↻ per aggiornare'}</p>`;
 }
 function turnoOrario(turno, cantiere) {
+  if (isForeco(cantiere)) return ' · 3 h 30';
   if (impianto(cantiere)) return /ECOFOR/i.test(cantiere) ? ' 07–15:30' : ' 08–16';
   const t = TURNI.find(x => x.nome === turno); return t ? ' ' + t.orario : '';
 }
@@ -450,6 +453,7 @@ function pProgramma() {
   const actions = `<button class="btn ghost" data-act="copyPrev">Copia settimana prima</button><button class="btn ghost" data-act="ops">${icon('dipendenti')}Operatori</button><button class="btn plain" data-act="printPlan">Stampa</button>`;
   if (!P || P.error) return head(actions) + tools + (P && P.error ? errBox(P.error) : loadingBox());
   const all = conFissi(P);
+  const forecoSite = P.cantieri.find(c => isForeco(c.nome));
   const isD = doppiDi(all);
   const hit = s => match(s.cantiere, s.operatori.join(' '), s.turno);
   const dayHtml = d => {
@@ -459,6 +463,7 @@ function pProgramma() {
         ${P.squadre.filter(s => s.data === d && s.turno === t.nome && !impiantoDi(s.cantiere)).map(s => `<button class="sqb ${hit(s) ? '' : 'dim'}" data-sq="${esc(s.id)}">
           <i style="background:${esc(siteColor(s.cantiere))}"></i><span><b>${esc(cap(s.cantiere))}</b> ${s.operatori.map(o => `<span class="${isD(d, o) ? 'doppio' : ''}">${esc(o)}</span>`).join(', ')}${s.nota ? `<em>${esc(s.nota)}</em>` : ''}</span></button>`).join('')}
         <button class="addsq" data-addsq="${d}|${t.nome}">+ Squadra</button></div>`).join('')}
+      ${forecoSite && GIORNI_FORECO.includes(dayOf(d).getDay()) && !P.squadre.some(s => s.data === d && isForeco(s.cantiere)) ? `<button class="addsq" data-addsq="${d}|Mattina" style="border-color:#f5c98a;color:#9a4a05">FORECO: nessuno in squadra · + aggiungi</button>` : ''}
       <div class="turno"><small>Impianti · Ecofor 07–15:30 · Ecoacciai 08–16</small>
         ${all.filter(s => s.data === d && !isAss(s.turno) && impiantoDi(s.cantiere)).map(s => s.auto
           ? `<div class="sqb fisso ${hit(s) ? '' : 'dim'}"><i style="background:${esc(siteColor(s.cantiere))}"></i><span><b>${esc(impiantoDi(s.cantiere).nome)}</b> <span class="${isD(d, s.operatori[0]) ? 'doppio' : ''}">${esc(s.operatori[0])}</span><em>cantiere fisso</em></span></div>`
@@ -475,7 +480,7 @@ function pProgramma() {
   const spec = `<article class="card"><div class="card-head"><h2>Specchietto ore</h2><small>programma contro contratto</small></div>
     <div class="rows">${box.map(r => `<div style="display:grid;gap:6px"><div class="row"><div class="txt"><b>${esc(r.nome)}</b></div><span class="sub"><b style="color:var(--ink)">${fmtH(r.h)}</b>/${fmtH(r.max)} h${r.d ? ` · ${r.d > 0 ? '+' : '−'}${fmtH(Math.abs(r.d))}` : ''}</span>${chip(lbl[r.st][0], lbl[r.st][1])}</div>
       <div class="meter"><i class="${r.st === 'ok' ? '' : r.st}" style="width:${Math.min(100, r.max ? r.h / r.max * 100 : 0)}%"></i></div></div>`).join('') || '<p class="empty">Nessun operatore: aggiungili da Operatori.</p>'}</div>
-    <p class="sub">Geofor 5 h a turno, Ecofor Service ed Ecoacciai 8 h. Ferie, malattia e permesso contano 5 h. Chi ha un impianto fisso (da Operatori) ci compare da solo dal lunedì al venerdì. <span class="doppio">Nome in rosso</span> = doppio turno.</p></article>`;
+    <p class="sub">Geofor 5 h a turno, FORECO 3 h 30 (lun-mer-ven), Ecofor Service ed Ecoacciai 8 h. Ferie, malattia e permesso contano 5 h. Chi ha un impianto fisso (da Operatori) ci compare da solo dal lunedì al venerdì. <span class="doppio">Nome in rosso</span> = doppio turno.</p></article>`;
   const save = `<div class="savebar ${P.dirty ? 'show' : ''}"><span>${P.dirty ? 'Modifiche non salvate' : 'Programma salvato'}</span>
     ${P.dirty ? '<button class="btn plain sm" data-act="undoPlan">Annulla</button>' : ''}<button class="btn sm" data-act="savePlan" ${P.dirty ? '' : 'disabled'}>Salva il programma</button></div>`;
   return head(actions) + tools + save + `<div class="days">${days.map(dayHtml).join('')}</div>` + `<div class="grid g-2">${spec}</div>`;
@@ -496,7 +501,7 @@ function sqEdit(id, data, turno) {
   const t = TURNI.find(x => x.nome === s.turno) || (imp ? { nome: 'Impianto', orario: 'Ecofor 07–15:30 · Ecoacciai 08–16' } : { nome: s.turno, orario: '' });
   openDlg(`<form id="sqForm" style="display:grid;gap:12px">
     <h2>${id ? 'Modifica squadra' : 'Nuova squadra'}</h2><p class="sub">${esc(dayOf(s.data).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' }))} · ${esc(t.nome)} ${esc(t.orario)}</p>
-    <label class="field">Cantiere<select name="cantiere">${names.map(n => `<option value="${esc(n)}" ${n === def ? 'selected' : ''}>${esc(cap(n))}</option>`).join('')}</select></label>
+    <label class="field">Cantiere<select name="cantiere">${names.map(n => `<option value="${esc(n)}" ${n === def ? 'selected' : ''}>${esc(cap(n))}${isForeco(n) ? ' · 3 h 30, lun-mer-ven' : ''}</option>`).join('')}</select></label>
     ${people.length ? [0, 1, 2, 3].map(i => `<label class="field">Operatore ${i + 1}${i ? ' (facoltativo)' : ''}<select name="op"><option value="">${i ? '—' : 'Scegli…'}</option>
       ${people.map(p => { const x = ore[p.nome.toLowerCase()] || { h: 0 }; const a = inAss(p.nome);
         return `<option value="${esc(p.nome)}" ${s.operatori[i] && sameName(s.operatori[i], p.nome) ? 'selected' : ''}>${esc(p.nome)} · ${fmtH(x.h)}/${fmtH(oreContratto(p.nome))} h${a ? ' · IN ' + a.toUpperCase() : altrove(p.nome, true) ? ' · già in squadra' : altrove(p.nome, false) ? ' · doppio turno' : ''}</option>`; }).join('')}</select></label>`).join('') : '<p class="empty">Nessun operatore: aggiungili da Operatori.</p>'}
@@ -506,7 +511,9 @@ function sqEdit(id, data, turno) {
     e.preventDefault();
     const f = new FormData(e.target), ops = [...new Set(f.getAll('op').map(String).filter(Boolean))];
     if (!ops.length) return toast('Scegli almeno un operatore');
-    Object.assign(s, { cantiere: String(f.get('cantiere') || def), operatori: ops, nota: String(f.get('nota') || '').trim() });
+    const cant = String(f.get('cantiere') || def);
+    if (isForeco(cant) && !GIORNI_FORECO.includes(dayOf(s.data).getDay()) && !confirm('FORECO di solito è lunedì, mercoledì e venerdì. Metterlo lo stesso in questo giorno?')) return;
+    Object.assign(s, { cantiere: cant, operatori: ops, nota: String(f.get('nota') || '').trim() });
     if (!id) P.squadre.push(s);
     P.dirty = true; dlg.close(); renderPage();
   });
@@ -1206,7 +1213,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- Modalità prova (dati finti, niente rete) ----------
 let DEMO_DB = null;
-const DEMO_SITES = () => (DEMO_DB && DEMO_DB.cantieri) || ['PONTEDERA', 'BIENTINA', 'CASCINA', 'CALCINAIA', 'ECOFOR SERVICE', 'ECOACCIAI'].map((n, i) => ({ nome: n, attivo: true, colore: SITE_COLORS[(i * 3) % SITE_COLORS.length] }));
+const DEMO_SITES = () => (DEMO_DB && DEMO_DB.cantieri) || ['PONTEDERA', 'BIENTINA', 'CASCINA', 'CALCINAIA', 'FORECO PONTEDERA', 'ECOFOR SERVICE', 'ECOACCIAI'].map((n, i) => ({ nome: n, attivo: true, colore: SITE_COLORS[(i * 3) % SITE_COLORS.length] }));
 function demoBuild() {
   const today = todayIso(), now = Date.now();
   const at = (iso, h, m) => { const d = dayOf(iso); d.setHours(h, m, 0, 0); return d.getTime(); };

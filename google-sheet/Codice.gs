@@ -16,12 +16,13 @@ const EMAIL_RESPONSABILE = '';
 // Oltre ORE_TURNO + TOLLERANZA_MIN il dipendente deve giustificare: l'extra conta solo se autorizzato.
 const ORE_TURNO = 5;
 // Committenti con turni diversi dai 5 ore di Geofor: ore del turno e durata in minuti (oltre la quale scatta l'extra)
-const TURNI_COMMITTENTE = { 'ECOFOR SERVICE': { ore: 8, minuti: 510 }, 'ECOACCIAI': { ore: 8, minuti: 480 } };
+const TURNI_COMMITTENTE = { 'ECOFOR SERVICE': { ore: 8, minuti: 510 }, 'ECOACCIAI': { ore: 8, minuti: 480 }, 'FORECO': { ore: 3.5, minuti: 210 } };
 function committenteDi_(cantiere) {
   const n = String(cantiere || '').toUpperCase();
   try { const m = committenti_()[n]; if (m) return m; } catch (e) { /* scheda non ancora creata */ }
   if (n.indexOf('ECOFOR') >= 0) return 'ECOFOR SERVICE';
   if (n.indexOf('ECOACCIAI') >= 0 || n.indexOf('ECO ACCIAI') >= 0) return 'ECOACCIAI';
+  if (n.indexOf('FORECO') >= 0) return 'FORECO';
   return 'GEOFOR';
 }
 const oreTurnoDi_ = cantiere => (TURNI_COMMITTENTE[committenteDi_(cantiere)] || {}).ore || ORE_TURNO;
@@ -1286,7 +1287,7 @@ function eliminaDpi_(id) {
 }
 
 // ---------- Committenti dei cantieri ----------
-// Scheda Cantieri, colonna E "Committente": GEOFOR, ECOFOR SERVICE o ECOACCIAI (vuoto = GEOFOR).
+// Scheda Cantieri, colonna E "Committente": GEOFOR, ECOFOR SERVICE, ECOACCIAI o FORECO (vuoto = GEOFOR).
 function committenti_() {
   const sh = foglioCantieri_();
   if (sh.getRange(1, 5).getValue() !== 'Committente') {
