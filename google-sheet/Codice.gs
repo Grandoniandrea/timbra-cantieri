@@ -176,20 +176,60 @@ function foglioCantieri_() {
   return sh;
 }
 
+// ---------- Account personali (presidente, responsabili) ----------
+// Oltre alla password principale si possono creare account con nome, ruolo e password propria.
+// Amministratore: tutto, compresi gli account. Responsabile: tutto tranne gli account e "Azzera tutto".
+const RUOLI = ['Amministratore', 'Responsabile'];
+function accounts_() { try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('ACCOUNTS') || '[]'); } catch (e) { return []; } }
+function salvaAccounts_(l) { PropertiesService.getScriptProperties().setProperty('ACCOUNTS', JSON.stringify(l)); }
+function hashPwd_(pwd, salt) { return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, salt + '|' + pwd, Utilities.Charset.UTF_8)); }
+const nomeKey_ = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+const accPubblico_ = a => ({ id: a.id, nome: a.nome, ruolo: a.ruolo, email: a.email || '', attivo: a.attivo !== false, primoAccesso: !!a.primoAccesso, principale: !!a.principale });
+// Chi entra: con il nome si cerca il suo account; senza nome vale la password principale (o quella di un account)
+function chiEntra_(req, giusta) {
+  const pwd = String(req.password || ''), nome = nomeKey_(req.utente);
+  const acc = accounts_().filter(a => a.attivo !== false);
+  if (nome) { const a = acc.find(x => nomeKey_(x.nome) === nome); return a && a.hash === hashPwd_(pwd, a.salt) ? a : null; }
+  if (pwd && pwd === giusta) return { id: 'principale', nome: 'Accesso principale', ruolo: 'Amministratore', principale: true };
+  return acc.find(a => a.hash === hashPwd_(pwd, a.salt)) || null;
+}
+function salvaAccount_(x) {
+  const l = accounts_(), nome = String(x && x.nome || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+  if (!nome) throw new Error('Serve nome e cognome');
+  if (l.some(a => a.id !== x.id && nomeKey_(a.nome) === nomeKey_(nome))) throw new Error('Esiste già un account con questo nome');
+  let a = x.id ? l.find(y => y.id === x.id) : null;
+  if (!a) { if (!x.password) throw new Error('Serve una password iniziale'); a = { id: Utilities.getUuid().slice(0, 8) }; l.push(a); }
+  Object.assign(a, { nome, ruolo: RUOLI.indexOf(x.ruolo) >= 0 ? x.ruolo : 'Responsabile', email: String(x.email || '').trim().slice(0, 120), attivo: x.attivo !== false });
+  if (x.password) {
+    if (String(x.password).length < 6) throw new Error('La password deve avere almeno 6 caratteri');
+    a.salt = Utilities.getUuid(); a.hash = hashPwd_(String(x.password), a.salt); a.primoAccesso = true;
+  }
+  salvaAccounts_(l);
+}
+function passwordAccount_(id, nuova) {
+  const l = accounts_(), a = l.find(y => y.id === id); if (!a) return;
+  a.salt = Utilities.getUuid(); a.hash = hashPwd_(String(nuova), a.salt); a.primoAccesso = false; salvaAccounts_(l);
+}
+const listaAccount_ = () => accounts_().map(accPubblico_);
+
 // ---------- Password dimenticata: codice via email al responsabile ----------
 // Il codice (6 cifre) vale 15 minuti; massimo 5 tentativi; un nuovo invio ogni 2 minuti.
 const mascheraEmail_ = e => String(e).replace(/^(.)[^@]*(@.*)$/, (m, a, b) => a + '•••' + b);
-function recuperaPassword_() {
+function recuperaPassword_(req) {
   const cache = CacheService.getScriptCache();
-  if (cache.get('recupero_inviato')) return { ok: false, error: 'attendi', msg: 'Codice già inviato: controlla la posta (anche lo spam) o riprova tra 2 minuti.' };
-  const to = EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail();
+  const acc = req && req.utente ? accounts_().find(a => a.attivo !== false && nomeKey_(a.nome) === nomeKey_(req.utente)) : null;
+  if (req && req.utente && !acc) return { ok: false, error: 'utente', msg: 'Nessun account con questo nome.' };
+  if (acc && !acc.email) return { ok: false, error: 'noemail', msg: 'Questo account non ha un\'email: chiedi all\'amministratore di cambiarti la password.' };
+  const k = acc ? '_' + acc.id : '';
+  if (cache.get('recupero_inviato' + k)) return { ok: false, error: 'attendi', msg: 'Codice già inviato: controlla la posta (anche lo spam) o riprova tra 2 minuti.' };
+  const to = acc ? acc.email : (EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail());
   if (!to) return { ok: false, error: 'noemail', msg: 'Nessuna email del responsabile impostata nello script.' };
   const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + Date.now());
   const n = bytes.slice(0, 4).reduce((s, b) => (s * 256 + (b & 255)) % 1000000, 0);
   const codice = String(n).padStart(6, '0');
-  cache.put('codice_recupero', codice, 900);
-  cache.put('tentativi_recupero', '0', 900);
-  cache.put('recupero_inviato', '1', 120);
+  cache.put('codice_recupero' + k, codice, 900);
+  cache.put('tentativi_recupero' + k, '0', 900);
+  cache.put('recupero_inviato' + k, '1', 120);
   MailApp.sendEmail({
     to, subject: 'Timbra Cantieri: codice per una nuova password',
     htmlBody: '<p>Hai chiesto di creare una nuova password del responsabile per Timbra Cantieri.</p>' +
@@ -200,15 +240,18 @@ function recuperaPassword_() {
 }
 function reimpostaPassword_(req) {
   const cache = CacheService.getScriptCache();
-  const giusto = cache.get('codice_recupero');
+  const acc = req.utente ? accounts_().find(a => a.attivo !== false && nomeKey_(a.nome) === nomeKey_(req.utente)) : null;
+  if (req.utente && !acc) return { ok: false, error: 'utente', msg: 'Nessun account con questo nome.' };
+  const k = acc ? '_' + acc.id : '';
+  const giusto = cache.get('codice_recupero' + k);
   if (!giusto) return { ok: false, error: 'scaduto', msg: 'Il codice è scaduto o non è stato chiesto: chiedine uno nuovo.' };
-  const t = Number(cache.get('tentativi_recupero') || 0);
-  if (t >= 5) { cache.remove('codice_recupero'); return { ok: false, error: 'scaduto', msg: 'Troppi tentativi: chiedi un nuovo codice.' }; }
-  if (String(req.codice || '').trim() !== giusto) { cache.put('tentativi_recupero', String(t + 1), 900); return { ok: false, error: 'codice', msg: 'Codice sbagliato.' }; }
+  const t = Number(cache.get('tentativi_recupero' + k) || 0);
+  if (t >= 5) { cache.remove('codice_recupero' + k); return { ok: false, error: 'scaduto', msg: 'Troppi tentativi: chiedi un nuovo codice.' }; }
+  if (String(req.codice || '').trim() !== giusto) { cache.put('tentativi_recupero' + k, String(t + 1), 900); return { ok: false, error: 'codice', msg: 'Codice sbagliato.' }; }
   const nuova = String(req.nuova || '');
   if (nuova.length < 6) return { ok: false, error: 'corta', msg: 'La password deve avere almeno 6 caratteri.' };
-  PropertiesService.getScriptProperties().setProperty('PASSWORD_ADMIN', nuova);
-  ['codice_recupero', 'tentativi_recupero', 'tentativi_admin'].forEach(k => cache.remove(k));
+  if (acc) passwordAccount_(acc.id, nuova); else PropertiesService.getScriptProperties().setProperty('PASSWORD_ADMIN', nuova);
+  ['codice_recupero' + k, 'tentativi_recupero' + k, 'tentativi_admin'].forEach(x => cache.remove(x));
   return { ok: true };
 }
 
@@ -227,16 +270,19 @@ function admin_(req) {
     return { ok: true };
   }
   // Password dimenticata: si chiede un codice via email e si crea una password nuova
-  if (req.azione === 'recupera') return recuperaPassword_();
+  if (req.azione === 'recupera') return recuperaPassword_(req);
   if (req.azione === 'reimposta') return reimpostaPassword_(req);
   const cache = CacheService.getScriptCache();
   const tentativi = Number(cache.get('tentativi_admin') || 0);
   if (tentativi >= 5) return { ok: false, error: 'bloccato', msg: 'Troppi tentativi sbagliati. Riprova tra 15 minuti.' };
-  if (String(req.password || '') !== giusta) {
+  const chi = chiEntra_(req, giusta);
+  if (!chi) {
     cache.put('tentativi_admin', String(tentativi + 1), 900);
-    return { ok: false, error: 'password', msg: 'Password sbagliata.' };
+    return { ok: false, error: 'password', msg: req.utente ? 'Nome o password sbagliati.' : 'Password sbagliata.' };
   }
   cache.remove('tentativi_admin');
+  const eAdmin = chi.ruolo === 'Amministratore';
+  if (['azzera', 'account', 'salvaaccount', 'eliminaaccount'].indexOf(req.azione) >= 0 && !eAdmin) return { ok: false, error: 'ruolo', msg: 'Solo un amministratore può farlo.' };
 
   const anno = Number(req.anno), mese = Number(req.mese);
   switch (req.azione) {
@@ -284,10 +330,13 @@ function admin_(req) {
     case 'cambiapassword': {
       const nuova = String(req.nuova || '');
       if (nuova.length < 6) return { ok: false, msg: 'La password deve avere almeno 6 caratteri.' };
-      props.setProperty('PASSWORD_ADMIN', nuova);
+      if (chi.principale) props.setProperty('PASSWORD_ADMIN', nuova); else passwordAccount_(chi.id, nuova);
       return { ok: true };
     }
-    default: return { ok: true, cantieri: tuttiCantieri_(), extraInAttesa: extraInAttesa_().length,
+    case 'account': return { ok: true, account: listaAccount_() };
+    case 'salvaaccount': salvaAccount_(req.account); return { ok: true, account: listaAccount_() };
+    case 'eliminaaccount': salvaAccounts_(accounts_().filter(a => a.id !== req.id)); return { ok: true, account: listaAccount_() };
+    default: return { ok: true, utente: accPubblico_(chi), cantieri: tuttiCantieri_(), extraInAttesa: extraInAttesa_().length,
       codice: PropertiesService.getScriptProperties().getProperty('CODICE_ACCESSO') || '',
       assenzeInAttesa: assenze_().filter(a => a.stato === ASS_ATTESA).length };
   }

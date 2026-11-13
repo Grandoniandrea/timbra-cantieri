@@ -14,7 +14,7 @@ const TURNI = [{ nome: 'Mattina', da: 6 * 60, a: 11 * 60, orario: '06–11' }, {
 const ASSENZE = ['Ferie', 'Malattia', 'Permesso'];
 
 const S = {
-  pwd: null, demo: false, view: 'dashboard', q: '',
+  pwd: null, utente: '', me: null, demo: false, view: 'dashboard', q: '',
   month: null, tFilter: 'tutte', iFilter: 'dafare', week: null,
   cantieri: [], extraN: 0, assN: 0,
   cache: {}, loading: {}
@@ -91,7 +91,7 @@ const TABS = ['dashboard', 'timbrature', 'programma', 'richieste'];
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
 async function api(azione, extra) {
   if (S.demo) return demoApi(azione, extra || {});
-  const res = await withTimeout(fetch(ENDPOINT, { method: 'POST', body: JSON.stringify({ admin: Object.assign({ password: S.pwd, azione }, extra || {}) }) }), 30000);
+  const res = await withTimeout(fetch(ENDPOINT, { method: 'POST', body: JSON.stringify({ admin: Object.assign({ password: S.pwd, utente: S.utente, azione }, extra || {}) }) }), 30000);
   const out = await res.json();
   if (!out.ok && (out.error === 'password' || out.error === 'bloccato')) { logout(out.msg || 'Accedi di nuovo.'); throw new Error('auth'); }
   if (!out.ok) throw new Error(out.msg || out.error || 'Errore del registro');
@@ -134,6 +134,7 @@ function renderLogin(msg) {
     <form class="login-card" id="loginForm">
       <img src="../logo.png" alt="GE3CO Gestione Ecologia" width="131" height="40">
       <div><h1>Area responsabile</h1><p>Timbra Cantieri · solo per l'amministratore. Dopo 5 tentativi sbagliati l'accesso si blocca per 15 minuti.</p></div>
+      <label class="field">Nome e cognome<input name="utente" autocomplete="username" placeholder="Vuoto per l'accesso principale" value="${esc(S.utente || (() => { try { return localStorage.getItem('tc_admin_utente') || ''; } catch (e) { return ''; } })())}"></label>
       <label class="field">Password<input type="password" name="pwd" autocomplete="current-password" required></label>
       <p class="msg" id="loginMsg">${esc(msg || '')}</p>
       <button class="btn block" type="submit" id="loginBtn">Entra</button>
@@ -144,11 +145,13 @@ function renderLogin(msg) {
   </main>`;
   $('#loginForm').addEventListener('submit', async e => {
     e.preventDefault();
-    const pwd = String(new FormData(e.target).get('pwd') || '');
+    const fd = new FormData(e.target), pwd = String(fd.get('pwd') || '');
+    S.utente = String(fd.get('utente') || '').trim().replace(/\s+/g, ' ');
+    try { localStorage.setItem('tc_admin_utente', S.utente); } catch (err) { /* niente */ }
     const btn = $('#loginBtn'); btn.disabled = true; btn.textContent = 'Controllo la password…';
     S.pwd = pwd; S.demo = false;
     try {
-      const out = await withTimeout(fetch(ENDPOINT, { method: 'POST', body: JSON.stringify({ admin: { password: pwd, azione: 'leggi' } }) }).then(r => r.json()), 30000);
+      const out = await withTimeout(fetch(ENDPOINT, { method: 'POST', body: JSON.stringify({ admin: { password: pwd, utente: S.utente, azione: 'leggi' } }) }).then(r => r.json()), 30000);
       if (!out.ok) {
         S.pwd = null;
         return renderLogin(out.error === 'nopass' ? 'La password del responsabile non è ancora stata creata: creala dall\'app Timbra Cantieri (5 tocchi sul logo).' : (out.msg || 'Password sbagliata.'));
@@ -158,10 +161,11 @@ function renderLogin(msg) {
   });
 }
 // Password dimenticata: codice di 6 cifre via email al responsabile, poi password nuova
-const rawAdmin = (azione, extra) => withTimeout(fetch(ENDPOINT, { method: 'POST', body: JSON.stringify({ admin: Object.assign({ azione }, extra || {}) }) }).then(r => r.json()), 30000);
+const rawAdmin = (azione, extra) => withTimeout(fetch(ENDPOINT, { method: 'POST', body: JSON.stringify({ admin: Object.assign({ azione, utente: S.utente }, extra || {}) }) }).then(r => r.json()), 30000);
 function forgot() {
+  const f = document.querySelector('#loginForm [name=utente]'); if (f) S.utente = f.value.trim().replace(/\s+/g, ' ');
   openDlg(`<h2>Password dimenticata</h2>
-    <p class="sub">Mandiamo un codice di 6 cifre all'email del responsabile (quella dell'account Google dello script). Con il codice crei una password nuova.</p>
+    <p class="sub">${S.utente ? `Mandiamo un codice di 6 cifre all'email dell'account di <b style="color:var(--ink)">${esc(S.utente)}</b>.` : 'Mandiamo un codice di 6 cifre all\'email dell\'accesso principale (l\'account Google dello script). Per un account personale scrivi prima nome e cognome nella pagina di accesso.'} Con il codice crei una password nuova.</p>
     <p class="msg" id="fgMsg"></p>
     <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button type="button" class="btn" id="fgSend">Invia il codice</button></div>`);
   $('#fgSend').addEventListener('click', async e => {
@@ -197,12 +201,30 @@ function forgotCode(email, note) {
   });
 }
 function enter(out) {
+  S.me = out.utente || { nome: 'Accesso principale', ruolo: 'Amministratore', principale: true };
   S.cantieri = out.cantieri || [];
   S.extraN = out.extraInAttesa || 0; S.assN = out.assenzeInAttesa || 0;
   S.cache = {}; S.view = 'dashboard'; S.month = monthNow(); S.week = mondayOf(todayIso());
   renderShell();
+  if (S.me.primoAccesso) firstPassword();
 }
-function logout(msg) { DEMO_DB = null; S.plan = null; S.pwd = null; S.demo = false; S.cache = {}; dlg.close(); renderLogin(msg); }
+const isAdmin = () => !S.me || S.me.ruolo === 'Amministratore';
+// Primo accesso con la password temporanea: si sceglie subito la propria
+function firstPassword() {
+  openDlg(`<form id="fpForm" style="display:grid;gap:12px"><h2>Scegli la tua password</h2>
+    <p class="sub">Benvenuto ${esc(S.me.nome)}! Stai usando la password temporanea data dall'amministratore: scegline una tua (almeno 6 caratteri). Solo tu la conosci.</p>
+    <label class="field">Nuova password<input type="password" name="p1" minlength="6" required autocomplete="new-password"></label>
+    <label class="field">Ripeti<input type="password" name="p2" minlength="6" required autocomplete="new-password"></label>
+    <p class="msg" id="fpMsg"></p><div class="actions"><button class="btn" type="submit">Salva</button></div></form>`);
+  $('#fpForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target), p1 = String(f.get('p1')), p2 = String(f.get('p2'));
+    if (p1 !== p2) { $('#fpMsg').textContent = 'Le due password non coincidono.'; return; }
+    try { await queued('cambiapassword', { nuova: p1 }); S.pwd = p1; S.me.primoAccesso = false; dlg.close(); toast('Password salvata'); }
+    catch (err) { $('#fpMsg').textContent = why(err); }
+  });
+}
+function logout(msg) { DEMO_DB = null; S.plan = null; S.me = null; S.pwd = null; S.demo = false; S.cache = {}; dlg.close(); renderLogin(msg); }
 
 // ---------- Struttura ----------
 function navBadge(v) {
@@ -240,7 +262,7 @@ function renderShell() {
         <div class="top-r">
           <button class="icon-btn" data-act="refresh" aria-label="Aggiorna i dati">${icon('refresh')}</button>
           <button class="icon-btn" data-go="richieste" aria-label="Richieste da approvare" id="bell">${icon('bell')}</button>
-          <div class="me"><div class="avatar" aria-hidden="true">AG</div><div class="who"><b>Andrea Grandoni</b><small>${S.demo ? 'Modalità prova' : 'Amministratore'}</small></div></div>
+          <div class="me"><div class="avatar" aria-hidden="true">${esc(S.me && !S.me.principale ? initials(S.me.nome) : 'AG')}</div><div class="who"><b>${esc(S.me && !S.me.principale ? S.me.nome : 'Andrea Grandoni')}</b><small>${S.demo ? 'Modalità prova' : esc(S.me ? S.me.ruolo : 'Amministratore')}</small></div></div>
         </div>
       </header>
       ${S.demo ? '<div class="demo-bar">Modalità prova: dati finti, non tocca il registro vero. <button class="link" data-act="logout">Esci dalla prova</button></div>' : ''}
@@ -879,7 +901,8 @@ function pImpostazioni() {
   return head() + `<div class="grid g-2">
     <article class="card"><h2>Link di invito</h2><p class="sub">Ogni operatore lo apre una volta sul suo telefono: da lì le sue timbrature vengono accettate. Non pubblicarlo nei gruppi aperti.</p>
       <button class="btn" data-act="invite">${icon('phone')}Prepara il link di invito</button></article>
-    <article class="card"><h2>Password del responsabile</h2><p class="sub">La stessa dell'app Timbra Cantieri. Almeno 6 caratteri.</p>
+    ${isAdmin() ? `<article class="card" style="grid-column:1/-1">${accountsTxt()}</article>` : ''}
+    <article class="card"><h2>La tua password</h2><p class="sub">${S.me && !S.me.principale ? `Account di ${esc(S.me.nome)} (${esc(S.me.ruolo)}).` : 'Password principale, la stessa dell\'app Timbra Cantieri.'} Almeno 6 caratteri.</p>
       <form id="pwdForm" style="display:grid;gap:10px"><label class="field">Nuova password<input type="password" name="p1" minlength="6" required autocomplete="new-password"></label>
       <label class="field">Ripeti<input type="password" name="p2" minlength="6" required autocomplete="new-password"></label><button class="btn ghost" type="submit">Cambia password</button></form></article>
     <article class="card"><h2>Sull'iPhone</h2><p class="sub">Apri questa pagina in Safari, tocca <b>Condividi</b> e poi <b>Aggiungi alla schermata Home</b>: si apre a tutto schermo come un'app. Per sicurezza la password va reinserita ogni volta che la riapri.</p></article>
@@ -890,6 +913,60 @@ function pImpostazioni() {
     <article class="card"><h2>Operatori</h2><p class="sub">Chi compare nel programma, ore settimanali da contratto e cantiere fisso.</p><button class="btn ghost" data-act="ops">${icon('dipendenti')}Gestisci operatori</button></article>
     <article class="card"><h2>App degli operatori</h2><p class="sub">Le timbrature si fanno dall'app Timbra Cantieri sul telefono di ogni operatore. Azzerare tutto il registro si fa ancora da lì.</p>
       <a class="btn plain" href="${APP_URL}" target="_blank" rel="noopener">Apri Timbra Cantieri</a></article></div>`;
+}
+// ---------- Account ----------
+const needAccountsNow = () => need('accounts', 'account', null, o => o.account || []);
+function accountsTxt() {
+  const a = need('accounts', 'account', null, o => o.account || []);
+  const list = Array.isArray(a) ? a : null;
+  return `<div class="card-head"><h2>Account</h2><button class="btn sm" data-act="accNew">${icon('plus')}Nuovo account</button></div>
+    <p class="sub">Ognuno entra con il suo nome e la sua password. <b style="color:var(--ink)">Amministratore</b>: può fare tutto, anche gestire gli account. <b style="color:var(--ink)">Responsabile</b>: tutto tranne gli account. L'accesso principale (solo password) resta valido.</p>
+    <div class="rows">${list === null ? (a && a.error ? errBox(a.error) : loadingBox()) : list.length ? list.map(x => `<div class="row">
+      <div class="ini c${x.ruolo === 'Amministratore' ? 3 : 0}" aria-hidden="true">${esc(initials(x.nome))}</div>
+      <div class="txt"><b>${esc(x.nome)}</b><span>${esc(x.email || 'senza email')}${x.primoAccesso ? ' · deve ancora scegliere la sua password' : ''}</span></div>
+      ${chip(x.attivo ? (x.ruolo === 'Amministratore' ? 'ok' : 'grey') : 'no', x.attivo ? x.ruolo : 'Disattivato')}
+      <button class="btn plain sm" data-accedit="${esc(x.id)}">Modifica</button></div>`).join('') : '<p class="empty">Nessun account personale: crea il primo.</p>'}</div>`;
+}
+const tempPwd = () => { const c = 'abcdefghjkmnpqrstuvwxyz23456789'; const a = new Uint32Array(8); crypto.getRandomValues(a); return [...a].map(n => c[n % c.length]).join(''); };
+function accEdit(id) {
+  const list = Array.isArray(S.cache.accounts) ? S.cache.accounts : [];
+  const x = id ? list.find(a => a.id === id) : { nome: '', ruolo: 'Responsabile', email: '', attivo: true };
+  if (!x) return;
+  openDlg(`<form id="accForm" style="display:grid;gap:12px"><h2>${id ? 'Modifica account' : 'Nuovo account'}</h2>
+    <label class="field">Nome e cognome<input name="nome" required maxlength="60" value="${esc(x.nome)}" placeholder="es. Gabriele Ciulli"></label>
+    <label class="field">Ruolo${sel('ruolo', [['Amministratore', 'Amministratore (tutto, anche gli account)'], ['Responsabile', 'Responsabile (tutto tranne gli account)']], x.ruolo)}</label>
+    <label class="field">Email (per "Password dimenticata?")<input type="email" name="email" maxlength="120" value="${esc(x.email)}" placeholder="facoltativa"></label>
+    ${id ? `<label class="check"><input type="checkbox" name="attivo" ${x.attivo ? 'checked' : ''}><span>Account attivo<em>togli la spunta per bloccarlo senza cancellarlo</em></span></label>
+      <label class="check"><input type="checkbox" name="reset"><span>Dai una nuova password temporanea<em>se l'ha dimenticata e non ha l'email</em></span></label>` : '<p class="sub">Creo una password temporanea da dargli: al primo accesso sceglie la sua.</p>'}
+    <div class="actions">${id ? '<button type="button" class="btn plain" id="accDel" style="color:#a61b1b">Elimina</button>' : ''}<button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">${id ? 'Salva' : 'Crea account'}</button></div></form>`);
+  const del = $('#accDel');
+  if (del) del.addEventListener('click', async () => {
+    if (!confirm(`Eliminare l'account di ${x.nome}? Non potrà più entrare.`)) return;
+    dlg.close();
+    try { S.cache.accounts = (await queued('eliminaaccount', { id })).account || []; toast('Account eliminato'); } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  });
+  $('#accForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const acc = { id: id || '', nome: String(f.get('nome') || '').trim(), ruolo: String(f.get('ruolo')), email: String(f.get('email') || '').trim(), attivo: id ? !!f.get('attivo') : true };
+    const pwd = !id || f.get('reset') ? tempPwd() : '';
+    if (pwd) acc.password = pwd;
+    dlg.close(); toast('Salvo l\'account…');
+    try {
+      S.cache.accounts = (await queued('salvaaccount', { account: acc })).account || [];
+      renderPage();
+      if (pwd) showTemp(acc.nome, pwd); else toast('Account salvato');
+    } catch (err) { const w = why(err); if (w) toast(w); renderPage(); }
+  });
+}
+function showTemp(nome, pwd) {
+  const link = new URL('./', location.href).href;
+  const msg = `Ciao ${nome.split(' ')[0]}, ecco il tuo accesso all'area responsabile GE3CO Timbra Cantieri:\n${link}\nNome: ${nome}\nPassword temporanea: ${pwd}\nAl primo accesso scegli la tua password.`;
+  openDlg(`<h2>Account pronto</h2><p class="sub">Dai a <b style="color:var(--ink)">${esc(nome)}</b> questi dati. La password temporanea si vede solo adesso: al primo accesso ne sceglierà una sua.</p>
+    <div class="card" style="background:#fff;gap:6px"><span class="sub">Nome</span><b>${esc(nome)}</b><span class="sub">Password temporanea</span><b style="font:700 26px/1 var(--font-d);letter-spacing:.08em">${esc(pwd)}</b></div>
+    <div class="actions" style="justify-content:flex-start"><a class="btn" href="https://wa.me/?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">Manda su WhatsApp</a><button class="btn ghost" data-copy="${esc(msg)}">Copia il messaggio</button></div>
+    <div class="actions"><button class="btn plain" data-act="close">Fatto</button></div>`);
 }
 function sedeTxt() {
   const s = needSede();
@@ -1221,13 +1298,14 @@ function moreMenu() {
 // ---------- Eventi ----------
 document.addEventListener('click', e => {
   if (document.body.classList.contains('printing')) endPrint();
-  const el = e.target.closest('[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy]');
+  const el = e.target.closest('[data-accedit],[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy]');
   if (!el) return;
   const d = el.dataset;
   if (d.go) return go(d.go);
   if (d.tf) { S.tFilter = d.tf; return renderPage(); }
   if (d.if) { S.iFilter = d.if; return renderPage(); }
   if (d.week) return changeWeek(d.week === '0' ? mondayOf(todayIso()) : addDays(S.week || mondayOf(todayIso()), Number(d.week)));
+  if (d.accedit) return accEdit(d.accedit);
   if (d.tedit) return tEdit(d.tedit);
   if (d.dedit) return dpiEdit(d.dedit);
   if (d.screg) { const [op, voce] = d.screg.split('|'); return scReg({ operatore: op, voce }); }
@@ -1257,6 +1335,7 @@ document.addEventListener('click', e => {
     case 'demo': S.demo = true; S.pwd = null; return demoApi('leggi').then(enter);
     case 'logout': return logout();
     case 'forgot': return forgot();
+    case 'accNew': if (!S.cache.accounts) needAccountsNow(); return accEdit(null);
     case 'refresh': return refresh();
     case 'more': return moreMenu();
     case 'close': return dlg.close();
@@ -1361,7 +1440,12 @@ async function demoApi(azione, x) {
   const ok = o => Object.assign({ ok: true }, o);
   const cantieri = DEMO_SITES();
   switch (azione) {
-    case 'leggi': return ok({ cantieri, extraInAttesa: D.extra.length, assenzeInAttesa: D.assenze.filter(a => a.stato === 'Da approvare').length });
+    case 'account': return ok({ account: D.accounts || [] });
+    case 'salvaaccount': { D.accounts = D.accounts || []; const a = x.account; const old = D.accounts.find(y => y.id === a.id);
+      const rec = { id: a.id || 'da' + Date.now(), nome: a.nome, ruolo: a.ruolo, email: a.email, attivo: a.attivo, primoAccesso: !!a.password || (old && old.primoAccesso) };
+      if (old) Object.assign(old, rec); else D.accounts.push(rec); return ok({ account: D.accounts }); }
+    case 'eliminaaccount': D.accounts = (D.accounts || []).filter(y => y.id !== x.id); return ok({ account: D.accounts });
+    case 'leggi': return ok({ utente: { nome: 'Accesso principale', ruolo: 'Amministratore', principale: true }, cantieri, extraInAttesa: D.extra.length, assenzeInAttesa: D.assenze.filter(a => a.stato === 'Da approvare').length });
     case 'timbrature': return ok({ timbrature: D.t.filter(t => { const d = new Date(t.start); return d.getFullYear() === x.anno && d.getMonth() === x.mese; }).sort((a, b) => b.start - a.start), cantieri });
     case 'programma': return ok({ squadre: D.squadre.filter(s => s.data >= x.da && s.data <= x.a), operatori: D.operatori, cantieri });
     case 'extra': return ok({ extra: D.extra });
