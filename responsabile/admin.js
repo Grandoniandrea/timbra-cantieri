@@ -405,12 +405,143 @@ function pDashboard() {
     <svg class="rings" aria-hidden="true" viewBox="0 0 200 200"><g fill="none" stroke="#95c11f" stroke-width="1"><circle cx="100" cy="100" r="90"/><circle cx="100" cy="100" r="70"/><circle cx="100" cy="100" r="50"/><circle cx="100" cy="100" r="30"/></g></svg>
     <div id="clockBody"></div></article>`;
 
+  const extra = dashExtra({ today, mon, m, tm, all, pl, ex, it, sc, t0 });
   return head(`<button class="btn" data-act="newInt">${icon('plus')}Nuovo intervento</button><button class="btn ghost" data-go="statistiche">Report del mese</button>`) +
     kpis +
+    `<div class="grid g-2">${extra.appello}${extra.sistemare}</div>` +
     `<div class="grid g-3">${weekCard}${memo}${oggi}</div>` +
     `<div class="grid g-3">${team}${intCard}${clock}</div>` +
+    `<div class="grid g-3">${extra.oreMese}${extra.prossima}${extra.scadenze}</div>` +
+    `<div class="grid g-2">${extra.fermi}</div>` +
     `<p class="foot">Dati dal registro Google di Timbra Cantieri · aggiornati all'apertura · ${S.demo ? 'modalità prova' : 'tocca ↻ per aggiornare'}</p>`;
 }
+// ---------- Dashboard: riquadri in più ----------
+// Stessa persona: nome uguale, oppure uno dei due è solo il cognome dell'altro ("Grandoni" = "Andrea Grandoni")
+const stessa = (a, b) => { const x = String(a).trim().toLowerCase(), y = String(b).trim().toLowerCase(); if (x === y) return true;
+  const lx = x.split(/\s+/), ly = y.split(/\s+/); return (lx.length === 1 && ly[ly.length - 1] === x) || (ly.length === 1 && lx[lx.length - 1] === y); };
+// Ora di inizio (minuti) di una squadra
+function inizioSquadra(s) {
+  if (/ECOFOR/i.test(s.cantiere)) return 7 * 60;
+  if (/ECOACCIAI|ECO ACCIAI/i.test(s.cantiere)) return 8 * 60;
+  if (isForeco(s.cantiere)) return 7 * 60;
+  const t = TURNI.find(x => x.nome === s.turno); return t ? t.da : 6 * 60;
+}
+const hhmmM = mm => `${pad(Math.floor(mm / 60))}:${pad(mm % 60)}`;
+const mini = (txt, cls) => `<span class="chip ${cls}" style="font-size:11px;padding:3px 8px">${esc(txt)}</span>`;
+function dashExtra(c) {
+  const { today, mon, m, tm, all, pl, ex, it, sc, t0 } = c;
+  const now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
+  const tOk = Array.isArray(tm);
+  const card = (title, sub, body, act, span) => `<article class="card ${span || ''}"><div class="card-head"><h2>${title}</h2>${act || (sub ? `<small>${sub}</small>` : '')}</div>${body}</article>`;
+  const row = (ini, a, b, right, attrs) => `<div class="row" ${attrs || ''}><div class="ini c${ini.c || 0}" aria-hidden="true">${esc(ini.t)}</div><div class="txt"><b>${esc(a)}</b><span>${esc(b)}</span></div>${right || ''}</div>`;
+
+  // 1. Chi manca all'appello
+  let appello;
+  if (!pl || !tOk) appello = card('Chi manca all\'appello', '', (pl && pl.error) || (tm && tm.error) ? errBox((pl && pl.error) || tm.error) : loadingBox());
+  else {
+    const sq = (pl.squadre || []).concat(autoFissi(pl.squadre || [], pl.operatori, mon)).filter(x => x.data === today && !isAss(x.turno));
+    const oggiT = all.filter(t => t.start >= t0.getTime());
+    const mancano = [], attesi = [], ritardi = [];
+    let presenti = 0;
+    sq.forEach(x => {
+      const ini = inizioSquadra(x);
+      x.operatori.forEach(o => {
+        const t = oggiT.find(tt => stessa(tt.dip, o) && Math.abs((new Date(tt.start).getHours() * 60 + new Date(tt.start).getMinutes()) - ini) <= 150);
+        if (t) { presenti++; if (t.tolti > 0) ritardi.push({ o, x, t }); }
+        else if (nowMin > ini + 15 && nowMin < ini + oreTurno(x.cantiere) * 60 + 60) mancano.push({ o, x, ini });
+        else if (nowMin <= ini + 15) attesi.push({ o, x, ini });
+      });
+    });
+    const nomeC = x => impiantoDi(x.cantiere) ? impiantoDi(x.cantiere).nome : cap(x.cantiere);
+    const body = !sq.length ? '<p class="empty">Nessuna squadra in programma oggi.</p>' : `<div class="rows">
+      ${mancano.map(r => row({ t: initials(r.o), c: 3 }, r.o, `${nomeC(r.x)} · doveva entrare alle ${hhmmM(r.ini)}`, mini('Non ha timbrato', 'no'))).join('')}
+      ${ritardi.map(r => row({ t: initials(r.o), c: 1 }, r.o, `${nomeC(r.x)} · entrato alle ${fmtTime(r.t.start)}`, mini(`Ritardo −${r.t.tolti} min`, 'wait'))).join('')}
+      ${!mancano.length && !ritardi.length ? `<p class="empty">✓ ${presenti ? `Tutti presenti (${presenti})` : 'Nessuno ancora atteso'}${attesi.length ? ` · ${attesi.length} attesi più tardi` : ''}</p>` : ''}
+      ${(mancano.length || ritardi.length) && attesi.length ? `<p class="sub">${attesi.length} attesi più tardi (${[...new Set(attesi.map(a => hhmmM(a.ini)))].join(', ')})</p>` : ''}</div>`;
+    appello = card('Chi manca all\'appello', `${presenti} presenti · ${mancano.length} mancanti`, body, mancano.length ? `<span class="chip no">${mancano.length} da chiamare</span>` : '');
+  }
+
+  // 2. Da sistemare oggi
+  let sistemare;
+  if (!tOk) sistemare = card('Da sistemare', '', tm && tm.error ? errBox(tm.error) : loadingBox());
+  else {
+    const aperti = all.filter(t => !t.end && Date.now() - t.start > (oreTurno(t.cantiere) + 1) * 36e5);
+    const fuori = all.filter(t => t.start >= t0.getTime() && /FUORI/i.test(t.sede));
+    const nEx = Array.isArray(ex) ? ex.length : S.extraN;
+    const righe = aperti.map(t => row({ t: initials(t.dip), c: 1 }, t.dip, `Uscita mancante · entrato ${fmtDay(t.start)} alle ${fmtTime(t.start)}`, `<button class="btn sm" data-tedit="${esc(t.id)}">Chiudi</button>`))
+      .concat(fuori.map(t => row({ t: initials(t.dip), c: 3 }, t.dip, `Fuori sede · ${cap(t.sede)}`, `<button class="btn plain sm" data-tedit="${esc(t.id)}">Vedi</button>`)));
+    sistemare = card('Da sistemare', '', `<div class="rows">${righe.join('') || '<p class="empty">✓ Niente uscite dimenticate né timbrature fuori sede.</p>'}
+      ${nEx ? `<div class="row"><div class="ini c0" aria-hidden="true">+</div><div class="txt"><b>${nEx} ${nEx === 1 ? 'ora extra' : 'ore extra'} da autorizzare</b><span>contano solo se autorizzate</span></div><button class="btn sm" data-go="richieste">Decidi</button></div>` : ''}</div>`,
+      (aperti.length + fuori.length + (nEx ? 1 : 0)) ? `<span class="chip wait">${aperti.length + fuori.length + (nEx ? 1 : 0)} da fare</span>` : '');
+  }
+
+  // 3. Ore del mese per dipendente (turni chiusi + extra autorizzati, contro il contratto fino a oggi)
+  let oreMese;
+  const ops = ((sc && sc.operatori) || (pl && pl.operatori) || []).filter(o => o.attivo !== false);
+  if (!tOk || !ops.length) oreMese = card('Ore del mese', '', loadingBox(), '', 'span-2');
+  else {
+    const giorni = now.getDate(), fattore = giorni / 7;
+    const righe = ops.map(o => {
+      const mie = all.filter(t => t.end && new Date(t.start).getMonth() === now.getMonth() && stessa(t.dip, o.nome));
+      const h = mie.reduce((a, t) => a + oreTurno(t.cantiere) - (t.tolti || 0) / 60 + (t.statoExtra === 'Autorizzato' ? (t.extra || 0) / 60 : 0), 0);
+      const atteso = (Number(o.ore) || 30) * fattore, d = h - atteso;
+      return { nome: o.nome, h, atteso, d };
+    }).sort((a, b) => a.d - b.d);
+    const max = Math.max(1, ...righe.map(r => Math.max(r.h, r.atteso)));
+    oreMese = card(`Ore del mese · ${monthName(m)}`, `fino a oggi (${giorni} giorni) · senza ferie e permessi`, `<div class="rows">${righe.slice(0, 10).map(r => {
+        const st = r.d < -5 ? 'under' : r.d > 5 ? 'over' : '';
+        return `<div style="display:grid;gap:5px"><div class="row"><div class="txt"><b>${esc(r.nome)}</b></div><span class="sub"><b style="color:var(--ink)">${fmtH(r.h)}</b> / ${fmtH(r.atteso)} h</span>${st ? mini(r.d < 0 ? `${fmtH(-r.d)} h da recuperare` : `+${fmtH(r.d)} h`, st === 'under' ? 'wait' : 'no') : mini('in linea', 'ok')}</div>
+          <div class="meter" style="position:relative"><i class="${st}" style="width:${Math.min(100, r.h / max * 100)}%"></i><span style="position:absolute;top:-2px;bottom:-2px;left:${Math.min(100, r.atteso / max * 100)}%;width:2px;background:var(--ink);opacity:.5"></span></div></div>`;
+      }).join('')}${righe.length > 10 ? `<p class="sub">e altri ${righe.length - 10} · <button class="link" data-go="statistiche">tutti nelle Statistiche</button></p>` : ''}</div>`, '', 'span-2');
+  }
+
+  // 4. Settimana prossima
+  const nw = addDays(mon, 7), np = needWeek(nw);
+  let prossima;
+  if (!np || np.error) prossima = card('Settimana prossima', '', np && np.error ? errBox(np.error) : loadingBox());
+  else {
+    const sq = np.squadre || [], av = [];
+    const giorni = [...Array(6)].map((_, i) => addDays(nw, i));
+    if (!sq.filter(x => !isAss(x.turno)).length) av.push(['no', 'Programma ancora vuoto']);
+    else {
+      giorni.forEach(d => { if (!sq.some(x => x.data === d && !isAss(x.turno))) av.push(['wait', `${fmtIsoShort(d)}: nessuna squadra`]); });
+      if (S.cantieri.some(x => isForeco(x.nome) && x.attivo !== false)) giorni.filter(d => GIORNI_FORECO.includes(dayOf(d).getDay())).forEach(d => { if (!sq.some(x => x.data === d && isForeco(x.cantiere))) av.push(['wait', `${fmtIsoShort(d)}: FORECO scoperto`]); });
+      sq.filter(x => isAss(x.turno)).forEach(a => a.operatori.forEach(o => { if (sq.some(x => x.data === a.data && !isAss(x.turno) && x.operatori.some(y => stessa(y, o)))) av.push(['no', `${fmtIsoShort(a.data)}: ${o} in ${a.turno.toLowerCase()} ma in squadra`]); }));
+    }
+    prossima = card('Settimana prossima', `dal ${dayOf(nw).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}`,
+      `<div class="rows">${av.length ? av.slice(0, 8).map(([cl, t]) => `<div class="row"><span class="dot" style="width:10px;height:10px;border-radius:50%;flex:none;background:${cl === 'no' ? '#dc2626' : '#d97706'}"></span><div class="txt"><span style="color:var(--ink);white-space:normal">${esc(t)}</span></div></div>`).join('') : `<p class="empty">✓ Programma completo (${sq.filter(x => !isAss(x.turno)).length} squadre)</p>`}</div>
+      <button class="btn ghost" data-act="goNext" style="margin-top:auto">Apri il programma</button>`);
+  }
+
+  // 5. Tutte le scadenze nei prossimi 30 giorni
+  const dp = needDpi();
+  let scadenze;
+  if (!sc || sc.error || !dp) scadenze = card('Scadenze entro 30 giorni', '', (sc && sc.error) ? errBox(sc.error) : loadingBox());
+  else {
+    const L = [];
+    if (sc.righe) scVicine(sc).filter(r => daysTo(r.scadenza) <= 30).forEach(r => L.push({ chi: r.operatore, cosa: r.voce, d: r.scadenza, go: 'dipendenti' }));
+    (sc.operatori || []).filter(o => o.attivo !== false && o.scadenzaContratto && daysTo(o.scadenzaContratto) <= 30).forEach(o => L.push({ chi: o.nome, cosa: 'Contratto a tempo determinato', d: o.scadenzaContratto, go: 'dipendenti' }));
+    if (!dp.error && dp.consegne) dpiScadute(dp).filter(x => daysTo(x.scadenza) <= 30).forEach(x => L.push({ chi: x.operatore, cosa: x.capo + (x.taglia ? ' · ' + x.taglia : ''), d: x.scadenza, go: 'dpi' }));
+    L.sort((a, b) => a.d.localeCompare(b.d));
+    scadenze = card('Scadenze entro 30 giorni', `${L.length} in tutto`, `<div class="rows">${L.slice(0, 7).map(x => { const g = daysTo(x.d);
+      return `<button class="row" data-go="${x.go}" style="border:0;background:transparent;padding:0;text-align:left;width:100%"><div class="txt"><b>${esc(x.chi)}</b><span>${esc(x.cosa)}</span></div>${mini(g < 0 ? `scaduto ${-g} g fa` : g === 0 ? 'oggi' : `tra ${g} g`, g < 0 ? 'no' : 'wait')}</button>`; }).join('') || '<p class="empty">✓ Niente in scadenza.</p>'}
+      ${L.length > 7 ? `<p class="sub">e altre ${L.length - 7}</p>` : ''}</div>`);
+  }
+
+  // 6. Interventi fermi
+  let fermi;
+  if (!it || it.error) fermi = card('Interventi fermi', '', it && it.error ? errBox(it.error) : loadingBox(), '', 'span-2');
+  else {
+    const F = it.interventi.filter(x => x.stato !== 'Fatto').map(x => ({ x, g: x.data ? -daysTo(x.data) : 0, libero: !x.assegnato || x.assegnato === 'Tutti' }))
+      .filter(r => r.g >= 2 || (r.libero && r.g >= 1)).sort((a, b) => b.g - a.g);
+    fermi = card('Interventi fermi', 'da fare da 2 giorni o più, o senza nessuno assegnato', `<div class="rows">${F.slice(0, 6).map(r => `<div class="row"><span class="pin ${r.g >= 4 ? '' : 'g'}">${icon('interventi')}</span>
+      <div class="txt"><b>${esc(r.x.indirizzo)}</b><span>${esc([r.x.localita, r.x.cosa].filter(Boolean).join(' · '))} · ${r.libero ? 'nessuno assegnato' : esc(r.x.assegnato)}</span></div>
+      ${mini(r.g === 1 ? 'da ieri' : `da ${r.g} giorni`, r.g >= 4 ? 'no' : 'wait')}<button class="btn plain sm" data-editint="${esc(r.x.id)}">Apri</button></div>`).join('') || '<p class="empty">✓ Nessun intervento fermo.</p>'}
+      ${F.length > 6 ? `<p class="sub">e altri ${F.length - 6} · <button class="link" data-go="interventi">vedi tutti</button></p>` : ''}</div>`, '', 'span-2');
+  }
+  return { appello, sistemare, oreMese, prossima, scadenze, fermi };
+}
+
 function turnoOrario(turno, cantiere) {
   if (isForeco(cantiere)) return ' 07–10:30';
   if (impianto(cantiere)) return /ECOFOR/i.test(cantiere) ? ' 07–15:30' : ' 08–16';
@@ -1090,8 +1221,9 @@ async function invite() {
 const toLocalInput = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const sel = (name, opts, cur, extra) => `<select name="${name}" ${extra || ''}>${opts.map(o => { const [v, l] = Array.isArray(o) ? o : [o, o]; return `<option value="${esc(v)}" ${String(v) === String(cur) ? 'selected' : ''}>${esc(l)}</option>`; }).join('')}</select>`;
 function tEdit(id) {
-  const m = S.month || monthNow(), list = S.cache[tKey(m)];
-  const t = Array.isArray(list) && list.find(x => x.id === id); if (!t) return;
+  let m = S.month || monthNow(), t = null;
+  Object.keys(S.cache).filter(k => k.startsWith('t:') && Array.isArray(S.cache[k])).forEach(k => { const f = S.cache[k].find(x => x.id === id); if (f) { t = f; m = k.slice(2); } });
+  if (!t) return;
   const names = S.cantieri.map(c => c.nome); if (!names.includes(t.cantiere)) names.unshift(t.cantiere);
   openDlg(`<form id="tForm" style="display:grid;gap:12px"><h2>${esc(t.dip)}</h2><p class="sub">${fmtDay(t.start)}${t.sede ? ' · ' + esc(cap(t.sede)) : ''}</p>
     <label class="field">Cantiere${sel('cantiere', names.map(n => [n, cap(n)]), t.cantiere)}</label>
@@ -1445,6 +1577,7 @@ document.addEventListener('click', e => {
     case 'logout': return logout();
     case 'forgot': return forgot();
     case 'whoami': return whoami();
+    case 'goNext': S.week = addDays(mondayOf(todayIso()), 7); if (S.plan && !S.plan.dirty) S.plan = null; return go('programma');
     case 'clearQ': { S.q = ''; const qi = $('#q'); if (qi) qi.value = ''; return renderPage(); }
     case 'switch': S.utente = ''; try { localStorage.removeItem('tc_admin_utente'); } catch (err) { /* niente */ } return logout('Entra con un altro account.');
     case 'accNew': if (!S.cache.accounts) needAccountsNow(); return accEdit(null);
