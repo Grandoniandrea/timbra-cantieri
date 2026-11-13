@@ -1357,4 +1357,12 @@ async function demoApi(azione, x) {
 }
 
 // ---------- Avvio ----------
-renderLogin();
+// Arrivando dall'app Timbra Cantieri già dentro l'area responsabile si entra senza riscrivere la password
+(function avvio() {
+  let h = null;
+  try { h = sessionStorage.getItem('tc_admin_handoff'); sessionStorage.removeItem('tc_admin_handoff'); } catch (e) { /* niente */ }
+  if (!h) return renderLogin();
+  $('#root').innerHTML = '<p class="loading">Entro nell\'area responsabile…</p>';
+  S.pwd = h;
+  rawAdmin('leggi', { password: h }).then(out => { if (out.ok) enter(out); else { S.pwd = null; renderLogin(out.msg); } }, err => { S.pwd = null; renderLogin(why(err)); });
+})();

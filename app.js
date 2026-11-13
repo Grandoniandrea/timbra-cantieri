@@ -2584,8 +2584,10 @@ function adminLogin(msg) {
     <h3>🔒 Area responsabile</h3>
     <p>${esc(msg || 'Inserisci la tua password.')}</p>
     <label>Password<input type="password" name="pwd" required autocomplete="current-password"></label>
-    <div class="row"><button class="btn ghost" value="" formnovalidate>Annulla</button><button class="btn" value="ok">Entra</button></div>`,
+    <div class="row"><button class="btn ghost" value="" formnovalidate>Annulla</button><button class="btn" value="ok">Entra</button></div>
+    <button class="btn ghost" value="forgot" formnovalidate>Password dimenticata?</button>`,
     (a, fd) => {
+      if (a === 'forgot') { setTimeout(adminForgot, 50); return; }
       adminPwd = String(fd.get('pwd') || '');
       busy('Controllo password');
       adminCall('leggi').then(out => {
@@ -2597,6 +2599,41 @@ function adminLogin(msg) {
         else if (out.error === 'nopass') { adminPwd = null; adminCreatePassword(); }
         else { adminPwd = null; adminLogin(out.msg || 'Errore.'); }
       }).catch(e => { adminPwd = null; adminLogin(motivoRete(e, 'accesso')); });
+    });
+}
+
+// Password dimenticata: codice di 6 cifre via email al responsabile, poi password nuova
+function adminForgot(msg) {
+  openDialog(`
+    <h3>🔑 Password dimenticata</h3>
+    <p>${esc(msg || 'Mandiamo un codice di 6 cifre all\'email del responsabile (quella dell\'account Google dello script). Con il codice crei una password nuova.')}</p>
+    <div class="row"><button class="btn ghost" value="" formnovalidate>Annulla</button><button class="btn" value="send">Invia il codice</button></div>`,
+    () => {
+      busy('Invio il codice');
+      withTimeout(adminCall('recupera'), 30000).then(out => {
+        if (out.ok || out.error === 'attendi') adminForgotCode(out.email, out.ok ? '' : out.msg);
+        else if (out.error === 'nopass') adminCreatePassword();
+        else adminForgot(out.msg || 'Per questa funzione lo script Google va aggiornato e ripubblicato.');
+      }, e => adminForgot(motivoRete(e, 'recupero password')));
+    });
+}
+function adminForgotCode(email, note, msg) {
+  openDialog(`
+    <h3>🔑 Nuova password</h3>
+    <p>${email ? `Codice inviato a <b>${esc(email)}</b>. ` : ''}${esc(note || '')} Vale 15 minuti: guarda anche nello spam.</p>
+    ${msg ? `<p class="note">${esc(msg)}</p>` : ''}
+    <label>Codice ricevuto<input name="codice" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></label>
+    <label>Nuova password<input type="password" name="p1" required minlength="6" autocomplete="new-password"></label>
+    <label>Ripeti password<input type="password" name="p2" required minlength="6" autocomplete="new-password"></label>
+    <div class="row"><button class="btn ghost" value="" formnovalidate>Annulla</button><button class="btn" value="ok">Salva ed entra</button></div>`,
+    (a, fd) => {
+      const p1 = String(fd.get('p1')), p2 = String(fd.get('p2'));
+      if (p1 !== p2) { setTimeout(() => adminForgotCode(email, note, 'Le due password non coincidono.'), 50); return; }
+      busy('Salvo la password');
+      withTimeout(adminCall('reimposta', { codice: String(fd.get('codice') || '').trim(), nuova: p1 }), 30000).then(out => {
+        if (out.ok) { adminPwd = p1; adminHome(); toast('Password nuova salvata'); }
+        else adminForgotCode(email, note, out.msg || 'Non è andata: riprova.');
+      }, e => adminForgotCode(email, note, motivoRete(e, 'recupero password')));
     });
 }
 
@@ -2641,6 +2678,7 @@ function adminHome() {
   openDialog(`
     <h3>🔒 Area responsabile</h3>
     <div class="menu">
+      <button class="btn" value="nuova">✨ Apri la nuova area responsabile (computer e iPhone)</button>
       <button class="btn ghost" value="sites">🏗️ Cantieri: aggiungi, togli, rinomina</button>
       <button class="btn ghost" value="report">📊 Report del mese: PDF, stampa, email, condividi</button>
       <button class="btn ghost" value="int">📍 Interventi da assegnare</button>
@@ -2676,6 +2714,8 @@ function adminHome() {
       invito: () => call('codice', null, 'Preparo il link', out => adminInvite(out.codice)),
       demo: () => { setDemo(!isDemo()); adminHome(); },
       reset: adminReset,
+      // Passa alla nuova area senza riscrivere la password (resta solo per questa scheda)
+      nuova: () => { try { sessionStorage.setItem('tc_admin_handoff', adminPwd || ''); } catch (e) { /* niente */ } location.href = 'responsabile/'; },
       logout: () => { adminPwd = null; toast('Uscito dall\'area responsabile'); },
       forget: () => { adminPwd = null; db.adminDevice = false; save(); toast('Per rientrare: 5 tocchi veloci sul logo'); },
     }[a];
