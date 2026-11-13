@@ -393,13 +393,21 @@ function startClock() {
     let sotto;
     if (ap === null || ap === undefined) sotto = '<p class="sub" style="margin-top:10px">Carico i turni aperti…</p>';
     else if (ap.length) {
-      const primo = ap.reduce((x, t) => t.start < x.start ? t : x, ap[0]);
-      const el = (Date.now() - primo.start) / 1000, durata = oreTurno(primo.cantiere) * 3600;
-      sotto = `<div style="margin-top:14px;display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap">
-          <span style="font-weight:600">${ap.length} in servizio</span><span class="sub">dalle ${fmtTime(primo.start)}</span></div>
-        <b style="display:block;font:700 30px/1.1 var(--font-d);font-variant-numeric:tabular-nums;margin:4px 0 8px">${hms(el)}</b>
-        <div class="track"><i style="width:${Math.min(100, Math.round(el / durata * 100))}%"></i></div>
-        <p class="sub" style="margin-top:8px">Il turno aperto da più tempo: ${esc(primo.dip)} · ${esc(cap(primo.cantiere))}</p>`;
+      // Squadre al lavoro: turni aperti raggruppati per cantiere, tempo dalla prima entrata
+      const sq = {};
+      ap.forEach(t => { const k = String(t.cantiere).toUpperCase(); (sq[k] = sq[k] || { cantiere: t.cantiere, start: t.start, ops: [] }); sq[k].start = Math.min(sq[k].start, t.start); sq[k].ops.push(t.dip); });
+      const list = Object.values(sq).sort((x, y) => x.start - y.start);
+      sotto = `<p style="margin-top:12px;font-weight:600">${ap.length} in servizio · ${list.length} ${list.length === 1 ? 'squadra' : 'squadre'}</p>
+        <div style="display:grid;gap:10px;margin-top:8px">${list.slice(0, 6).map(q => {
+          const el = (Date.now() - q.start) / 1000, durata = oreTurno(q.cantiere) * 3600, over = el > durata;
+          const nome = impiantoDi(q.cantiere) ? impiantoDi(q.cantiere).nome : cap(q.cantiere);
+          return `<div style="display:grid;gap:4px">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">
+              <span style="font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(nome)}</span>
+              <b style="font:700 20px/1 var(--font-d);font-variant-numeric:tabular-nums;flex:none;${over ? 'color:#fca5a5' : ''}">${hms(el)}</b></div>
+            <div class="track"><i style="width:${Math.min(100, Math.round(el / durata * 100))}%;${over ? 'background:#f87171' : ''}"></i></div>
+            <span class="sub" style="font-size:12px">${esc(q.ops.join(', '))} · dalle ${fmtTime(q.start)}${over ? ' · oltre il turno' : ''}</span></div>`;
+        }).join('')}${list.length > 6 ? `<p class="sub">e altre ${list.length - 6} squadre</p>` : ''}</div>`;
     } else {
       const next = TURNI.find(t => min < t.da);
       sotto = `<p style="margin-top:14px;font-weight:600">Nessun servizio attivo</p>
