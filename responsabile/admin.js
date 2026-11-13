@@ -1,5 +1,5 @@
 'use strict';
-// GE3CO · Area responsabile — dashboard per computer e iPhone.
+// GEECO · Area responsabile — dashboard per computer e iPhone.
 // Usa lo stesso registro Google (Apps Script) dell'app Timbra Cantieri, con la password del responsabile.
 // La password resta solo in memoria: chiusa la pagina va reinserita.
 
@@ -132,7 +132,7 @@ function renderLogin(msg) {
   $('#root').innerHTML = `
   <main class="login">
     <form class="login-card" id="loginForm">
-      <img src="../logo.png" alt="GE3CO Gestione Ecologia" width="131" height="40">
+      <img src="../logo.png" alt="GEECO Gestione Ecologia" width="131" height="40">
       <div><h1>Area responsabile</h1><p>Timbra Cantieri · solo per l'amministratore. Dopo 5 tentativi sbagliati l'accesso si blocca per 15 minuti.</p></div>
       <label class="field">Nome e cognome<input name="utente" autocomplete="username" placeholder="Vuoto per l'accesso principale" value="${esc(S.utente || (() => { try { return localStorage.getItem('tc_admin_utente') || ''; } catch (e) { return ''; } })())}"></label>
       <label class="field">Password<input type="password" name="pwd" autocomplete="current-password" required></label>
@@ -257,7 +257,7 @@ function renderShell() {
     </aside>
     <div class="main">
       <header class="top">
-        <button class="phone-brand" data-go="dashboard" aria-label="Dashboard"><img src="../logo.png" alt="GE3CO" width="105" height="32"></button>
+        <button class="phone-brand" data-go="dashboard" aria-label="Dashboard"><img src="../logo.png" alt="GEECO" width="105" height="32"></button>
         <label class="search"><span class="sr">Cerca</span>${icon('search', 'width="18" height="18" style="color:var(--muted)"')}<input type="search" id="q" placeholder="Cerca operatore, cantiere, indirizzo" value="${esc(S.q)}" autocomplete="off"></label>
         <div class="top-r">
           <button class="icon-btn" data-act="refresh" aria-label="Aggiorna i dati">${icon('refresh')}</button>
@@ -717,7 +717,7 @@ function printPlan() {
   const P = S.plan; if (!P) return;
   const days = [...Array(7)].map((_, i) => addDays(P.week, i)), all = conFissi(P), isD = doppiDi(all);
   const cell = (d, t) => all.filter(s => s.data === d && (t === 'Impianto' ? !isAss(s.turno) && impiantoDi(s.cantiere) : s.turno === t && !impiantoDi(s.cantiere))).map(s => `<div><b>${esc(impiantoDi(s.cantiere) ? impiantoDi(s.cantiere).nome : cap(s.cantiere))}</b>: ${s.operatori.map(o => isD(d, o) ? `<span style="color:#b42318;font-weight:700">${esc(o)}</span>` : esc(o)).join(', ')}</div>`).join('');
-  printDoc(`<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GE3CO"><div><h1>Programma della settimana</h1><p>Dal ${fmtIso(P.week)} al ${fmtIso(days[6])}</p></div></div>
+  printDoc(`<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GEECO"><div><h1>Programma della settimana</h1><p>Dal ${fmtIso(P.week)} al ${fmtIso(days[6])}</p></div></div>
     <table><thead><tr><th>Giorno</th><th>Mattina 06–11</th><th>Pomeriggio 13–18</th><th>Impianti</th><th>Assenze</th></tr></thead><tbody>
     ${days.map(d => `<tr><td><b>${dayOf(d).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'short' })}</b></td><td>${cell(d, 'Mattina')}</td><td>${cell(d, 'Pomeriggio')}</td><td>${cell(d, 'Impianto')}</td><td>${ASSENZE.map(a => cell(d, a) ? `<div><b>${a}</b>: ${P.squadre.filter(s => s.data === d && s.turno === a).map(s => esc(s.operatori.join(', '))).join(', ')}</div>` : '').join('')}</td></tr>`).join('')}
     </tbody></table><p>In rosso: doppio turno.</p></div>`);
@@ -1037,7 +1037,7 @@ function accEdit(id) {
 }
 function showTemp(nome, pwd) {
   const link = new URL('./', location.href).href;
-  const msg = `Ciao ${nome.split(' ')[0]}, ecco il tuo accesso all'area responsabile GE3CO Timbra Cantieri:\n${link}\nNome: ${nome}\nPassword temporanea: ${pwd}\nAl primo accesso scegli la tua password.`;
+  const msg = `Ciao ${nome.split(' ')[0]}, ecco il tuo accesso all'area responsabile GEECO Timbra Cantieri:\n${link}\nNome: ${nome}\nPassword temporanea: ${pwd}\nAl primo accesso scegli la tua password.`;
   openDlg(`<h2>Account pronto</h2><p class="sub">Dai a <b style="color:var(--ink)">${esc(nome)}</b> questi dati. La password temporanea si vede solo adesso: al primo accesso ne sceglierà una sua.</p>
     <div class="card" style="background:#fff;gap:6px"><span class="sub">Nome</span><b>${esc(nome)}</b><span class="sub">Password temporanea</span><b style="font:700 26px/1 var(--font-d);letter-spacing:.08em">${esc(pwd)}</b></div>
     <div class="actions" style="justify-content:flex-start"><a class="btn" href="https://wa.me/?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">Manda su WhatsApp</a><button class="btn ghost" data-copy="${esc(msg)}">Copia il messaggio</button></div>
@@ -1268,7 +1268,7 @@ function printOrder() {
   const m = {};
   dpiScadute(d).forEach(c => { const tg = c.taglia || '—', k = c.capo + '|' + tg; (m[k] = m[k] || { capo: c.capo, taglia: tg, qta: 0, chi: [] }); m[k].qta += c.qta || 1; m[k].chi.push(c.operatore); });
   const rows = Object.values(m).sort((a, b) => a.capo.localeCompare(b.capo));
-  printDoc(`<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GE3CO"><div><h1>DPI e vestiario da ordinare</h1><p>Aggiornato al ${fmtIso(todayIso())}</p></div></div>
+  printDoc(`<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GEECO"><div><h1>DPI e vestiario da ordinare</h1><p>Aggiornato al ${fmtIso(todayIso())}</p></div></div>
     <table><thead><tr><th>Capo</th><th>Taglia</th><th>Quantità</th><th>Per</th></tr></thead><tbody>${rows.map(r => `<tr><td>${esc(r.capo)}</td><td>${esc(r.taglia)}</td><td><b>${r.qta}</b></td><td>${r.chi.map(esc).join(', ')}</td></tr>`).join('') || '<tr><td colspan="4">Niente da ordinare.</td></tr>'}</tbody></table></div>`);
 }
 function printScheda() {
@@ -1280,7 +1280,7 @@ function printScheda() {
     const nome = String(new FormData(e.target).get('op')), t = taglieDi(d, nome);
     const cons = (d.consegne || []).filter(c => sameName(c.operatore, nome)).sort((a, b) => a.data.localeCompare(b.data));
     dlg.close();
-    printDoc(`<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GE3CO"><div><h1>Scheda consegna DPI e vestiario</h1>
+    printDoc(`<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GEECO"><div><h1>Scheda consegna DPI e vestiario</h1>
       <p>Operatore: <b>${esc(nome)}</b> · Taglie: maglia ${esc(t.maglia || '—')}, pantalone ${esc(t.pantalone || '—')}, scarpe ${esc(t.scarpe || '—')}</p></div></div>
       <table><thead><tr><th>Data</th><th>Capo / DPI</th><th>Taglia</th><th>Q.tà</th><th>Scadenza</th><th style="width:22%">Firma operatore</th></tr></thead>
       <tbody>${cons.map(c => `<tr><td>${fmtIso(c.data)}</td><td>${esc(c.capo)}</td><td>${esc(c.taglia || '')}</td><td>${c.qta}</td><td>${c.scadenza ? fmtIso(c.scadenza) : ''}</td><td style="height:26px"></td></tr>`).join('') || '<tr><td colspan="6">Nessuna consegna registrata.</td></tr>'}</tbody></table>

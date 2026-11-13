@@ -38,7 +38,7 @@ const AUTORIZZA_NOME = 'INSERISCI_NOME';
 const AUTORIZZA_TELEFONO = 'INSERISCI_TELEFONO';
 
 // Sede: si timbra solo entro RAGGIO metri. Il responsabile può ricentrarla dall'app (Area responsabile → Sede).
-const SEDE_PREDEFINITA = { nome: 'Sede GE3CO – Via G. Ferraris 7, Pisa', lat: 43.6790219, lng: 10.4356678, raggio: 200 };
+const SEDE_PREDEFINITA = { nome: 'Sede GEECO – Via G. Ferraris 7, Pisa', lat: 43.6790219, lng: 10.4356678, raggio: 200 };
 
 const FOGLIO_TIMBRATURE = 'Timbrature';
 const INTESTAZIONE = ['ID', 'Dipendente', 'Data', 'Cantiere', 'Entrata', 'Uscita', 'Ore', 'Stato', 'Telefono', 'Aggiornato',
@@ -298,7 +298,7 @@ function admin_(req) {
       const r = req.tipo === 'comuni' ? creaComuni_(anno, mese) : creaRiepilogo_(anno, mese);
       SpreadsheetApp.flush();
       const blob = esporta_(r.sheetId, 'pdf');
-      return { ok: true, nome: 'GE3CO ' + r.titolo + '.pdf', base64: Utilities.base64Encode(blob.getBytes()) };
+      return { ok: true, nome: 'GEECO ' + r.titolo + '.pdf', base64: Utilities.base64Encode(blob.getBytes()) };
     }
     case 'email': inviaRiepilogo_(anno, mese); return { ok: true };
     case 'timbrature': return { ok: true, timbrature: timbratureMese_(anno, mese), cantieri: tuttiCantieri_() };
@@ -562,7 +562,7 @@ function distanza_(a, b) {
 }
 
 // Esito del controllo sede per una posizione: '' se ok, altrimenti il problema
-// Impianti dei committenti dove si timbra (oltre alla sede GE3CO)
+// Impianti dei committenti dove si timbra (oltre alla sede GEECO)
 const IMPIANTI = [
   { nome: 'Ecofor Service – Via dell\'Industria 2, Pontedera', lat: 43.6500665, lng: 10.5916598, raggio: 350 },
   { nome: 'Ecoacciai – Via R. Mattioli 1, Pontedera', lat: 43.6424598, lng: 10.5852918, raggio: 350 },
@@ -584,7 +584,7 @@ function fuoriSede_(p, quando) {
   if (!p) return '';
   if (p.errore) return quando + ' senza posizione';
   const margine = Math.min(Number(p.acc) || 0, 100);
-  // Va bene la sede GE3CO o uno degli impianti: conta il punto più vicino
+  // Va bene la sede GEECO o uno degli impianti: conta il punto più vicino
   const vicina = [sede_()].concat(IMPIANTI, [zonaForeco_()]).map(z => ({ z, d: distanza_(z, p) })).sort((a, b) => a.d - b.d)[0];
   const d = vicina.d;
   return d > vicina.z.raggio + margine ? quando + ' a ' + (d >= 1000 ? (d / 1000).toFixed(1).replace('.', ',') + ' km' : Math.round(d) + ' m') + ' dalla sede' : '';
@@ -879,10 +879,10 @@ function avvisoSerale() {
   if (scad.length) html += '<h3>Visite mediche e corsi in scadenza (' + scad.length + ')</h3>' +
     li(scad.map(x => '<b>' + x.operatore + '</b> · ' + x.voce + ' · ' + (x.giorni < 0 ? 'scaduto da ' + (-x.giorni) + ' giorni' : 'scade tra ' + x.giorni + ' giorni') +
       ' (' + Utilities.formatDate(daIso_(x.scadenza), tz, 'dd/MM/yyyy') + ')'));
-  html += '<p>Si sistemano dall\'app: tieni premuto il logo GE3CO → Area responsabile.</p>';
+  html += '<p>Si sistemano dall\'app: tieni premuto il logo GEECO → Area responsabile.</p>';
   MailApp.sendEmail({
     to: EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail(),
-    subject: 'GE3CO – Da sistemare oggi (' + (aperti.length + extra.length + ass.length + fuori.length + scad.length + ritardi.length) + ')',
+    subject: 'GEECO – Da sistemare oggi (' + (aperti.length + extra.length + ass.length + fuori.length + scad.length + ritardi.length) + ')',
     htmlBody: html,
   });
 }
@@ -915,7 +915,7 @@ function inviaRiepilogo_(anno, mese) {
 
   MailApp.sendEmail({
     to: EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail(),
-    subject: 'GE3CO – Ore del personale – ' + r.nomeMese,
+    subject: 'GEECO – Ore del personale – ' + r.nomeMese,
     htmlBody: '<p>Riepilogo ore del personale di <b>' + r.nomeMese + '</b>.</p>' + tabella +
       '<p>Dettaglio di tutte le timbrature: <a href="' + link + '">apri il Google Sheet</a></p>' +
       '<p>Ogni turno vale ' + ORE_TURNO + ' ore (Ecofor Service ed Ecoacciai 8 ore); le ore extra contano solo se autorizzate.</p>' +
@@ -1011,10 +1011,10 @@ function avvisiImmediati(soloSegna) {
   if (soloSegna === true || !nuovi.length) return;
 
   const oggetto = nuovi.length === 1
-    ? 'GE3CO – ' + nuovi[0].titolo + ': ' + nuovi[0].dip
-    : 'GE3CO – ' + nuovi.length + ' avvisi';
+    ? 'GEECO – ' + nuovi[0].titolo + ': ' + nuovi[0].dip
+    : 'GEECO – ' + nuovi.length + ' avvisi';
   const html = nuovi.map(x => '<p><b>' + x.titolo + '</b><br>' + x.dip + '<br>' + x.testo + '</p>').join('') +
-    '<p>Si sistema dall\'app: tieni premuto il logo GE3CO → Area responsabile.</p>';
+    '<p>Si sistema dall\'app: tieni premuto il logo GEECO → Area responsabile.</p>';
   MailApp.sendEmail({
     to: EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail(),
     subject: oggetto,
@@ -1202,12 +1202,12 @@ function foglioInterventi_() {
   return sh;
 }
 
-/** Cartella Drive "GE3CO Interventi" (creata la prima volta). */
+/** Cartella Drive "GEECO Interventi" (creata la prima volta). */
 function cartellaInterventi_() {
   const props = PropertiesService.getScriptProperties();
   const id = props.getProperty('CARTELLA_INTERVENTI');
   if (id) { try { return DriveApp.getFolderById(id); } catch (e) { /* cancellata: se ne crea un'altra */ } }
-  const f = DriveApp.createFolder('GE3CO Interventi');
+  const f = DriveApp.createFolder('GEECO Interventi');
   props.setProperty('CARTELLA_INTERVENTI', f.getId());
   return f;
 }

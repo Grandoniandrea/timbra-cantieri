@@ -13,7 +13,7 @@ const CLIENTI = [
   // FORECO scarl: discarica di Gello, lunedì-mercoledì-venerdì; il punto di timbratura arriva dal registro (cfg().zonaForeco)
   { id: 'FORECO', nome: 'Foreco', logo: '', turno: { ore: 3.5, inizio: '07:00', fine: '10:30', giorni: 'lunedì, mercoledì, venerdì' } },
 ];
-// Dove si può timbrare: la sede GE3CO e gli impianti dei committenti (chi lavora lì timbra all'impianto)
+// Dove si può timbrare: la sede GEECO e gli impianti dei committenti (chi lavora lì timbra all'impianto)
 const zoneTimbratura = () => [cfg().sede].concat(CLIENTI.map(c => c.sede), [cfg().zonaForeco || ZONA_FORECO]).filter(z => z && isFinite(z.lat));
 // Punto indicativo della discarica di Gello finché il responsabile non lo centra (Area responsabile → Punto FORECO)
 const ZONA_FORECO = { nome: 'Foreco – discarica di Gello, Pontedera', lat: 43.6492, lng: 10.5725, raggio: 1000 };
@@ -54,9 +54,9 @@ function load() {
     user: null,
   };
 }
-// Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
+// Registro aziendale GEECO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 68;
+const APP_VERSION = 69;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -142,7 +142,7 @@ async function requireSede(what, cb) {
   }
   const zone = zoneTimbratura();
   if (zone.length) {
-    // Basta essere dentro una delle zone: sede GE3CO, Ecofor Service o Ecoacciai
+    // Basta essere dentro una delle zone: sede GEECO, Ecofor Service o Ecoacciai
     const vicina = zone.map(z => ({ z, d: distanza(z, pos) })).sort((a, b) => a.d - b.d)[0];
     if (vicina.d > vicina.z.raggio + Math.min(pos.acc || 0, 100)) {
       return retry('🚫 Non sei in sede',
@@ -1045,7 +1045,7 @@ function dpiOrderRows() {
 }
 function dpiOrderDoc() {
   const rows = dpiOrderRows();
-  return `<div class="plan-doc"><div class="pd-head"><img src="logo.png" alt="GE3CO"><div><h1>DPI e vestiario da ordinare</h1><p>Aggiornato al ${dmyIt(isoDay(new Date()))}</p></div></div>
+  return `<div class="plan-doc"><div class="pd-head"><img src="logo.png" alt="GEECO"><div><h1>DPI e vestiario da ordinare</h1><p>Aggiornato al ${dmyIt(isoDay(new Date()))}</p></div></div>
     <table class="pd-t dpi-t"><thead><tr><th style="text-align:left">Capo</th><th>Taglia</th><th>Quantità</th><th style="text-align:left">Per</th></tr></thead>
     <tbody>${rows.map(r => `<tr><td>${esc(r.capo)}</td><td style="text-align:center">${esc(r.taglia)}</td><td style="text-align:center"><b>${r.qta}</b></td><td>${r.chi.map(esc).join(', ')}</td></tr>`).join('') || '<tr><td colspan="4">Niente da ordinare.</td></tr>'}</tbody></table></div>`;
 }
@@ -1067,7 +1067,7 @@ function dpiOrder() {
 function dpiDoc(nome) {
   const t = dpiTaglieDi(nome);
   const cons = dpiData.consegne.filter(c => sameName(c.operatore, nome)).sort((a, b) => a.data.localeCompare(b.data) || a.capo.localeCompare(b.capo));
-  return `<div class="plan-doc"><div class="pd-head"><img src="logo.png" alt="GE3CO"><div><h1>Scheda consegna DPI e vestiario</h1>
+  return `<div class="plan-doc"><div class="pd-head"><img src="logo.png" alt="GEECO"><div><h1>Scheda consegna DPI e vestiario</h1>
       <p>Operatore: <b>${esc(nome)}</b> · Taglie: maglia ${esc(t.maglia || '—')}, pantalone ${esc(t.pantalone || '—')}, scarpe ${esc(t.scarpe || '—')}</p></div></div>
     <table class="pd-t dpi-t"><thead><tr><th style="text-align:left">Data</th><th style="text-align:left">Capo / DPI</th><th>Taglia</th><th>Q.tà</th><th>Scadenza</th><th style="width:22%">Firma operatore</th></tr></thead>
     <tbody>${cons.map(c => `<tr><td>${dmyIt(c.data)}</td><td>${esc(c.capo)}</td><td style="text-align:center">${esc(c.taglia || '')}</td><td style="text-align:center">${c.qta}</td><td style="text-align:center">${c.scadenza ? dmyIt(c.scadenza) : ''}</td><td style="height:26px"></td></tr>`).join('') || '<tr><td colspan="6">Nessuna consegna registrata.</td></tr>'}</tbody></table>
@@ -1264,7 +1264,7 @@ const DEMO_STEPS = [
       demoClose(); const s = db.sites.find(x => x.name === 'CASCINA'); db.active = { id: 'dact', siteId: s.id, start: Date.now() - (4 * 60 + 52) * 60000, posIn: null }; render(); demoScroll(); } },
   { t: 'Interventi con foto', d: 'Il responsabile manda le segnalazioni dei cittadini. L\'operatore naviga fino all\'indirizzo, fa le foto prima e dopo e le invia su WhatsApp.', run: () => {
       db.active = null; render(); intFoto.di1 = { prima: DEMO.srv.foto.prima, dopo: DEMO.srv.foto.dopo, nota: '' }; intView('di1'); } },
-  { t: 'Modulo ore settimanale', d: 'Il modulo cartaceo GE3CO si compila da solo con le timbrature: 5 ore fisse per cantiere. Si stampa o si invia in PDF.', run: () => { modShow(DEMO.lastMon); } },
+  { t: 'Modulo ore settimanale', d: 'Il modulo cartaceo GEECO si compila da solo con le timbrature: 5 ore fisse per cantiere. Si stampa o si invia in PDF.', run: () => { modShow(DEMO.lastMon); } },
   { t: 'Stima della busta paga', d: 'Ogni operatore vede una stima del netto del mese. Le ore extra restano a parte finché non vengono autorizzate.', run: () => { payMode = 'fine'; payShow(monthNow()); } },
   { t: 'Area del responsabile', d: 'Protetta da password e invisibile agli operatori. Da qui si gestisce tutto.', run: () => { adminPwd = 'demo'; adminExtraCount = DEMO.srv.extra.length; adminAbsCount = 1; adminHome(); } },
   { t: 'Programma della settimana', d: 'Le squadre si compongono con le tendine. Lo specchietto mostra subito chi sfora le ore (rosso), chi deve ancora lavorare (arancione) e chi è a posto (verde).', run: () => { planHoursOpen = true; adminPlan(DEMO.mon); } },
@@ -1689,7 +1689,7 @@ function planDoc() {
   const cell = (d, t) => planSquads.filter(x => x.data === d && x.turno === t).map(x => `<div class="pp-sq">
       <b>${esc(x.cantiere)}</b>${x.operatori.map(o => `<span class="${isD(d, o) ? 'pp-n pp-d' : 'pp-n'}">${esc(o)}</span>`).join('')}${x.nota ? `<i>${esc(x.nota)}</i>` : ''}</div>`).join('') || '';
   return `<div class="plan-doc">
-    <div class="pd-head"><img src="logo.png" alt="GE3CO"><div><h1>Programma ingombranti</h1>
+    <div class="pd-head"><img src="logo.png" alt="GEECO"><div><h1>Programma ingombranti</h1>
       <p>Settimana dal <b>${dmy(planWeek)}</b> al <b>${dmy(fine)}</b></p></div></div>
     <table class="pd-t">
       <colgroup><col style="width:16%"><col style="width:42%"><col style="width:42%"></colgroup>
@@ -1916,7 +1916,7 @@ function planPeopleEdit() {
   });
 }
 
-// ---------- Modulo ore settimanale (modello cartaceo GE3CO) ----------
+// ---------- Modulo ore settimanale (modello cartaceo GEECO) ----------
 // Compila il modulo "Settimana DAL … AL …" con le timbrature del telefono: un blocco per cantiere,
 // ora inizio / ora fine / totale per ogni giorno. Se i cantieri sono più di 4 si aggiunge un secondo modulo.
 const MOD_GIORNI = ['LUN', 'MAR', 'MER', 'GIO', 'VEN', 'SAB', 'DOM'];
@@ -1992,7 +1992,7 @@ function modDoc(week) {
       <tbody>${[0, 1, 2, 3].map(i => block(lista[i])).join('')}</tbody>
     </table>
     <div class="mod-foot">
-      <img src="logo.png" alt="GE3CO Gestione Ecologia">
+      <img src="logo.png" alt="GEECO Gestione Ecologia">
       <p>Consegnare questo modulo compilato tassativamente entro il MARTEDÌ della settimana successiva al proprio Caposquadra o nell'apposita cassettina della sede di Pontedera. Il foglio dell'ultima settimana del mese deve invece pervenire entro il giorno 2 del mese successivo. Specificare bene il cantiere (es: Geofor Cascina) e la tipologia di intervento (es: RSU).<br>
       Il lavoratore sarà chiamato a rispondere in caso di anomalia tra quanto da esso dichiarato e quanto previsto dagli ordini di servizio. La ripetizione di eventuali abusi sarà punita conformemente a quanto prevede il nostro CCNL.</p>
     </div>
@@ -2850,7 +2850,7 @@ async function sharePdf(out) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 function printReport(r) {
-  $('#printArea').innerHTML = `<img src="logo.png" alt="GE3CO" class="print-logo">
+  $('#printArea').innerHTML = `<img src="logo.png" alt="GEECO" class="print-logo">
     <h1>${adminReportType === 'comuni' ? 'Servizi per comune' : 'Ore del personale'} – ${esc(r.nomeMese)}</h1>${reportTable(r)}
     <p class="print-foot">Stampato il ${new Date().toLocaleDateString('it-IT')}</p>`;
   if (dlg.open) dlg.close();
