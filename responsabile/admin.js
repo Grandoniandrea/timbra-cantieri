@@ -291,6 +291,7 @@ function pDashboard() {
   const all = [].concat(Array.isArray(tm) ? tm : [], Array.isArray(tp) ? tp : []);
   const t0 = dayOf(today); t0.setHours(0, 0, 0, 0);
   const aperte = all.filter(t => !t.end && t.start >= t0.getTime());
+  S.aperte = Array.isArray(tm) ? aperte : null;
   const extraN = Array.isArray(ex) ? ex.length : S.extraN;
   const assN = Array.isArray(as) ? as.filter(a => a.stato === 'Da approvare').length : S.assN;
   const attivi = S.cantieri.filter(c => c.attivo !== false);
@@ -378,30 +379,34 @@ function statoTimbratura(t) {
   if (!t.end) return chip('ok', 'In servizio');
   return chip('grey', 'Chiusa');
 }
-// Orologio del turno Geofor in corso (06–11 / 13–18)
+// Orologio: ora attuale; il tempo scorre solo se c'è davvero qualcuno in servizio (turni aperti oggi)
 let clockTimer = null;
 function stopClock() { if (clockTimer) { clearInterval(clockTimer); clockTimer = null; } }
+const hms = sec => `${pad(Math.floor(sec / 3600))}:${pad(Math.floor(sec / 60) % 60)}:${pad(Math.floor(sec) % 60)}`;
 function startClock() {
   const paint = () => {
     const box = $('#clockBody'); if (!box) return stopClock();
-    const now = new Date(), min = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
-    const cur = TURNI.find(t => min >= t.da && min < t.a);
-    const next = TURNI.find(t => min < t.da);
-    if (cur) {
-      const el = (min - cur.da) * 60, left = (cur.a - min) * 60;
-      const hh = Math.floor(el / 3600), mm = Math.floor(el / 60) % 60, ss = Math.floor(el) % 60;
-      box.innerHTML = `<h2 style="font:600 18px var(--font-b)">Turno di ${cur.nome.toLowerCase()}</h2><p class="sub">${cur.orario} · tempo trascorso</p>
-        <strong style="display:block;margin:12px 0">${pad(hh)}:${pad(mm)}:${pad(ss)}</strong>
-        <div class="track"><i style="width:${Math.round((min - cur.da) / (cur.a - cur.da) * 100)}%"></i></div>
-        <p class="sub" style="margin-top:10px">Mancano ${Math.floor(left / 3600)} h ${pad(Math.floor(left / 60) % 60)} min alla fine del turno</p>`;
+    const now = new Date(), min = now.getHours() * 60 + now.getMinutes();
+    const ora = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    const data = now.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' });
+    const ap = S.aperte;
+    let sotto;
+    if (ap === null || ap === undefined) sotto = '<p class="sub" style="margin-top:10px">Carico i turni aperti…</p>';
+    else if (ap.length) {
+      const primo = ap.reduce((x, t) => t.start < x.start ? t : x, ap[0]);
+      const el = (Date.now() - primo.start) / 1000, durata = oreTurno(primo.cantiere) * 3600;
+      sotto = `<div style="margin-top:14px;display:flex;justify-content:space-between;gap:10px;align-items:baseline;flex-wrap:wrap">
+          <span style="font-weight:600">${ap.length} in servizio</span><span class="sub">dalle ${fmtTime(primo.start)}</span></div>
+        <b style="display:block;font:700 30px/1.1 var(--font-d);font-variant-numeric:tabular-nums;margin:4px 0 8px">${hms(el)}</b>
+        <div class="track"><i style="width:${Math.min(100, Math.round(el / durata * 100))}%"></i></div>
+        <p class="sub" style="margin-top:8px">Il turno aperto da più tempo: ${esc(primo.dip)} · ${esc(cap(primo.cantiere))}</p>`;
     } else {
-      const target = next ? next.da : TURNI[0].da + 1440;
-      const left = (target - min) * 60;
-      box.innerHTML = `<h2 style="font:600 18px var(--font-b)">Prossimo turno</h2><p class="sub">${next ? next.nome + ' ' + next.orario : 'Mattina 06–11 di domani'}</p>
-        <strong style="display:block;margin:12px 0">${pad(Math.floor(left / 3600))}:${pad(Math.floor(left / 60) % 60)}:${pad(Math.floor(left) % 60)}</strong>
-        <div class="track"><i style="width:0%"></i></div>
-        <p class="sub" style="margin-top:10px">Turni Geofor da 5 ore · impianti da 8 ore</p>`;
+      const next = TURNI.find(t => min < t.da);
+      sotto = `<p style="margin-top:14px;font-weight:600">Nessun servizio attivo</p>
+        <p class="sub">${next ? `Prossimo turno Geofor alle ${pad(Math.floor(next.da / 60))}:00 (${next.nome.toLowerCase()})` : 'Prossimo turno domani alle 06:00'}</p>`;
     }
+    box.innerHTML = `<h2 style="font:600 18px var(--font-b)">Adesso</h2><p class="sub">${esc(data.charAt(0).toUpperCase() + data.slice(1))}</p>
+      <strong style="display:block;margin:10px 0 0">${ora}</strong>${sotto}`;
   };
   paint(); clockTimer = setInterval(paint, 1000);
 }
