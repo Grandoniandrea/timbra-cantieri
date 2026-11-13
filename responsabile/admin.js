@@ -305,7 +305,29 @@ function renderPage() {
 }
 
 // ---------- Dashboard ----------
+// Ricerca dalla lente: sulla dashboard e nelle Impostazioni mostra i risultati da tutte le sezioni
+function pRicerca() {
+  const q = S.q, m = monthNow();
+  const tm = needMonth(m), it = needInt(), sc = needScad();
+  const ops = (sc && sc.operatori) || (S.plan && S.plan.operatori) || [];
+  const opsHit = ops.filter(o => match(o.nome));
+  const siteHit = S.cantieri.filter(c => match(c.nome));
+  const tHit = Array.isArray(tm) ? tm.filter(t => match(t.dip, t.cantiere, t.sede)) : null;
+  const iHit = it && it.interventi ? it.interventi.filter(x => match(x.indirizzo, x.localita, x.cliente, x.cosa, x.assegnato)) : null;
+  const sez = (titolo, go, righe, vuoto) => `<article class="card"><div class="card-head"><h2>${titolo}</h2>${go ? `<button class="btn ghost sm" data-go="${go}">Apri</button>` : ''}</div>
+    <div class="rows">${righe === null ? loadingBox() : righe.length ? righe.join('') : `<p class="empty">${vuoto}</p>`}</div></article>`;
+  const riga = (a, b, go) => `<button class="row" data-go="${go}" style="border:0;background:transparent;padding:0;text-align:left;width:100%"><div class="txt"><b>${esc(a)}</b><span>${esc(b)}</span></div></button>`;
+  return `<div class="page-head"><div><h1>Cerca</h1><p>Risultati per “${esc(q)}” · tocca una voce per aprirla (il filtro resta attivo)</p></div>
+    <div class="actions"><button class="btn plain" data-act="clearQ">Cancella la ricerca</button></div></div>
+    <div class="grid g-2">
+      ${sez('Dipendenti', 'dipendenti', sc === undefined ? null : opsHit.slice(0, 8).map(o => riga(o.nome, [o.contratto, o.ore ? o.ore + ' h/sett.' : '', o.fisso ? 'fisso: ' + cap(o.fisso) : ''].filter(Boolean).join(' · ') || 'operatore', 'dipendenti')), 'Nessun dipendente.')}
+      ${sez('Cantieri', 'programma', siteHit.slice(0, 8).map(c => riga(cap(c.nome), c.attivo === false ? 'non attivo' : 'attivo', 'programma')), 'Nessun cantiere.')}
+      ${sez('Timbrature di ' + monthName(m), 'timbrature', tHit === null ? null : tHit.slice(0, 8).map(t => riga(`${t.dip} · ${cap(t.cantiere)}`, `${fmtDay(t.start)} · ${fmtTime(t.start)}–${t.end ? fmtTime(t.end) : 'in corso'}`, 'timbrature')), 'Nessuna timbratura questo mese.')}
+      ${sez('Interventi', 'interventi', iHit === null ? null : iHit.slice(0, 8).map(x => riga(x.indirizzo, [x.localita, x.stato, x.assegnato && x.assegnato !== 'Tutti' ? x.assegnato : ''].filter(Boolean).join(' · '), 'interventi')), 'Nessun intervento.')}
+    </div>`;
+}
 function pDashboard() {
+  if (S.q) return pRicerca();
   const today = todayIso(), mon = mondayOf(today);
   const m = monthNow(), mPrev = mon.slice(0, 7);
   const tm = needMonth(m); const tp = mPrev !== m ? needMonth(mPrev) : [];
@@ -730,7 +752,7 @@ function pInterventi() {
   const actions = `<button class="btn" data-act="newInt">${icon('plus')}Nuovo intervento</button>`;
   if (!it || it.error) return head(actions) + tools + (it && it.error ? errBox(it.error) : loadingBox());
   const ops = (it.operatori || []).filter(o => o.attivo !== false).map(o => o.nome);
-  const list = it.interventi.filter(x => S.iFilter === 'tutti' || (S.iFilter === 'fatti' ? x.stato === 'Fatto' : x.stato !== 'Fatto'))
+  const list = it.interventi.filter(x => S.q || S.iFilter === 'tutti' || (S.iFilter === 'fatti' ? x.stato === 'Fatto' : x.stato !== 'Fatto'))
     .filter(x => match(x.indirizzo, x.localita, x.cliente, x.cosa, x.assegnato, x.fattoDa));
   const card = x => {
     const fatto = x.stato === 'Fatto';
@@ -973,6 +995,7 @@ function ctrEdit(nome) {
 }
 
 function pImpostazioni() {
+  if (S.q) return pRicerca();
   return head() + `<div class="grid g-2">
     <article class="card"><h2>Link di invito</h2><p class="sub">Ogni operatore lo apre una volta sul suo telefono: da lì le sue timbrature vengono accettate. Non pubblicarlo nei gruppi aperti.</p>
       <button class="btn" data-act="invite">${icon('phone')}Prepara il link di invito</button></article>
@@ -1422,6 +1445,7 @@ document.addEventListener('click', e => {
     case 'logout': return logout();
     case 'forgot': return forgot();
     case 'whoami': return whoami();
+    case 'clearQ': { S.q = ''; const qi = $('#q'); if (qi) qi.value = ''; return renderPage(); }
     case 'switch': S.utente = ''; try { localStorage.removeItem('tc_admin_utente'); } catch (err) { /* niente */ } return logout('Entra con un altro account.');
     case 'accNew': if (!S.cache.accounts) needAccountsNow(); return accEdit(null);
     case 'refresh': return refresh();
