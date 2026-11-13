@@ -52,7 +52,7 @@ const COL_RITARDO = 19, COL_TOLTI = 20;
 // Si timbra al massimo 10 minuti prima; fino a 15 minuti di ritardo non si perde niente,
 // oltre si tolgono i minuti arrotondati al quarto d'ora successivo (es. 20 min di ritardo = 30 min tolti).
 // Uscire dopo l'orario non dà straordinario: il turno vale sempre le sue ore fisse.
-const ORARI_TURNO = { 'GEOFOR': [[360, 660], [780, 1080]], 'ECOFOR SERVICE': [[420, 930]], 'ECOACCIAI': [[480, 960]] };
+const ORARI_TURNO = { 'GEOFOR': [[360, 660], [780, 1080]], 'ECOFOR SERVICE': [[420, 930]], 'ECOACCIAI': [[480, 960]], 'FORECO': [[420, 630]] };
 const ANTICIPO_MIN = 10, TOLLERANZA_RITARDO_MIN = 15;
 const REGOLE_ORARIO_DAL = new Date(2026, 9, 24); // le timbrature precedenti restano come erano
 function ritardo_(start, cantiere) {
@@ -142,7 +142,7 @@ function doGet(e) {
   }
   if (e && e.parameter && e.parameter.azione === 'cantieri') {
     return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), committenti: committenti_(), fisso: fissoDi_(e.parameter.nome), config: {
-      oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN, turni: TURNI, sede: sede_(),
+      oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN, turni: TURNI, sede: sede_(), zonaForeco: zonaForeco_(),
       autorizzaNome: AUTORIZZA_NOME.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_NOME,
       autorizzaTelefono: AUTORIZZA_TELEFONO.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_TELEFONO,
       resetAt: Number(PropertiesService.getScriptProperties().getProperty('RESET_AT') || 0),
@@ -277,6 +277,7 @@ function admin_(req) {
     case 'fotointervento': return { ok: true, foto: fotoIntervento_(req.id, req.tipo) };
     case 'azzera': azzera_(); return { ok: true };
     case 'sede': impostaSede_(req.sede); return { ok: true, sede: sede_() };
+    case 'zonaforeco': impostaZonaForeco_(req.zona); return { ok: true, zona: zonaForeco_() };
     case 'assenze': return { ok: true, assenze: assenze_() };
     case 'decidiassenza': decidiAssenza_(req.id, !!req.approva); return { ok: true, assenze: assenze_() };
     case 'decidi': decidiExtra_(req.id, !!req.approva); return { ok: true, extra: extraInAttesa_() };
@@ -514,12 +515,25 @@ const IMPIANTI = [
   { nome: 'Ecofor Service – Via dell\'Industria 2, Pontedera', lat: 43.6500665, lng: 10.5916598, raggio: 350 },
   { nome: 'Ecoacciai – Via R. Mattioli 1, Pontedera', lat: 43.6424598, lng: 10.5852918, raggio: 350 },
 ];
+// FORECO (discarica di Gello): punto indicativo finché il responsabile non lo centra dall'app (Punto FORECO)
+const ZONA_FORECO_PREDEFINITA = { nome: 'Foreco – discarica di Gello, Pontedera', lat: 43.6492, lng: 10.5725, raggio: 1000 };
+function zonaForeco_() {
+  const v = PropertiesService.getScriptProperties().getProperty('ZONA_FORECO');
+  try { if (v) return Object.assign({}, ZONA_FORECO_PREDEFINITA, JSON.parse(v)); } catch (e) { /* valore non valido */ }
+  return ZONA_FORECO_PREDEFINITA;
+}
+function impostaZonaForeco_(x) {
+  const lat = Number(x && x.lat), lng = Number(x && x.lng), raggio = Math.round(Number(x && x.raggio) || 0);
+  if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error('Posizione non valida');
+  if (raggio < 50 || raggio > 2000) throw new Error('Raggio non valido');
+  PropertiesService.getScriptProperties().setProperty('ZONA_FORECO', JSON.stringify({ lat, lng, raggio }));
+}
 function fuoriSede_(p, quando) {
   if (!p) return '';
   if (p.errore) return quando + ' senza posizione';
   const margine = Math.min(Number(p.acc) || 0, 100);
   // Va bene la sede GE3CO o uno degli impianti: conta il punto più vicino
-  const vicina = [sede_()].concat(IMPIANTI).map(z => ({ z, d: distanza_(z, p) })).sort((a, b) => a.d - b.d)[0];
+  const vicina = [sede_()].concat(IMPIANTI, [zonaForeco_()]).map(z => ({ z, d: distanza_(z, p) })).sort((a, b) => a.d - b.d)[0];
   const d = vicina.d;
   return d > vicina.z.raggio + margine ? quando + ' a ' + (d >= 1000 ? (d / 1000).toFixed(1).replace('.', ',') + ' km' : Math.round(d) + ' m') + ' dalla sede' : '';
 }

@@ -10,9 +10,13 @@ const CLIENTI = [
     sede: { nome: 'Ecofor Service – Via dell\'Industria 2, Pontedera', lat: 43.6500665, lng: 10.5916598, raggio: 350 } },
   { id: 'ECOACCIAI', nome: 'Ecoacciai', logo: 'logo-ecoacciai.png', turno: { ore: 8, inizio: '08:00', fine: '16:00', giorni: '' },
     sede: { nome: 'Ecoacciai – Via R. Mattioli 1, Pontedera', lat: 43.6424598, lng: 10.5852918, raggio: 350 } },
+  // FORECO scarl: discarica di Gello, lunedì-mercoledì-venerdì; il punto di timbratura arriva dal registro (cfg().zonaForeco)
+  { id: 'FORECO', nome: 'Foreco', logo: '', turno: { ore: 3.5, inizio: '07:00', fine: '10:30', giorni: 'lunedì, mercoledì, venerdì' } },
 ];
 // Dove si può timbrare: la sede GE3CO e gli impianti dei committenti (chi lavora lì timbra all'impianto)
-const zoneTimbratura = () => [cfg().sede].concat(CLIENTI.map(c => c.sede)).filter(z => z && isFinite(z.lat));
+const zoneTimbratura = () => [cfg().sede].concat(CLIENTI.map(c => c.sede), [cfg().zonaForeco || ZONA_FORECO]).filter(z => z && isFinite(z.lat));
+// Punto indicativo della discarica di Gello finché il responsabile non lo centra (Area responsabile → Punto FORECO)
+const ZONA_FORECO = { nome: 'Foreco – discarica di Gello, Pontedera', lat: 43.6492, lng: 10.5725, raggio: 1000 };
 const turnoCliente = nome => (CLIENTI.find(c => c.id === committenteDi(nome)) || {}).turno || null;
 // Ore che vale un turno su quel cantiere
 const oreTurnoDi = nome => (turnoCliente(nome) || {}).ore || cfg().oreTurno;
@@ -22,6 +26,7 @@ function committenteDi(nome) {
   if (CLIENTI.some(c => c.id === m)) return m;
   if (n.includes('ECOFOR')) return 'ECOFOR SERVICE';
   if (n.includes('ECOACCIAI') || n.includes('ECO ACCIAI')) return 'ECOACCIAI';
+  if (n.includes('FORECO')) return 'FORECO';
   return 'GEOFOR';
 }
 // Stato della demo guidata (vedi sezione Demo)
@@ -51,7 +56,7 @@ function load() {
 }
 // Registro aziendale GE3CO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 66;
+const APP_VERSION = 68;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -260,7 +265,7 @@ function render() {
     const n = tutti.filter(s => committenteDi(s.name) === c.id).length;
     const mine = fissoSite && committenteDi(fissoSite.name) === c.id;
     return `<button type="button" class="client ${c.id === open ? 'on' : ''}" data-client="${esc(c.id)}" aria-pressed="${c.id === open}">
-      <span class="client-logo"><img src="${c.logo}" alt="${esc(c.nome)}"></span>
+      <span class="client-logo">${c.logo ? `<img src="${c.logo}" alt="${esc(c.nome)}">` : `<b class="client-txt">${esc(c.nome.toUpperCase())}</b>`}</span>
       <span class="client-n">${mine ? '🏭 ' : ''}${n} cantier${n === 1 ? 'e' : 'i'}</span></button>`;
   }).join('');
   const shown = open ? tutti.filter(s => committenteDi(s.name) === open).sort((a, b) => (b === fissoSite) - (a === fissoSite)) : [];
@@ -2382,7 +2387,7 @@ function extraMin() { return 0; }
 
 // ---------- Orari di entrata (le stesse regole sono nello script Google) ----------
 // Inizio e fine dei turni per committente, in minuti dalla mezzanotte
-const ORARI_TURNO = { 'GEOFOR': [[360, 660], [780, 1080]], 'ECOFOR SERVICE': [[420, 930]], 'ECOACCIAI': [[480, 960]] };
+const ORARI_TURNO = { 'GEOFOR': [[360, 660], [780, 1080]], 'ECOFOR SERVICE': [[420, 930]], 'ECOACCIAI': [[480, 960]], 'FORECO': [[420, 630]] };
 const ANTICIPO_MIN = 10, TOLLERANZA_RITARDO_MIN = 15;
 const hhmm = m => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
 const turniDi = nome => ORARI_TURNO[committenteDi(nome)] || ORARI_TURNO.GEOFOR;
@@ -2691,6 +2696,7 @@ function adminHome() {
       <button class="btn ghost" value="shifts">✏️ Modifica timbrature dei dipendenti</button>
       <button class="btn ghost" value="invito">🔗 Link di invito per gli operatori</button>
       <button class="btn ghost" value="sede">📍 Sede per le timbrature</button>
+      <button class="btn ghost" value="foreco">📍 Punto FORECO (discarica di Gello)</button>
       <button class="btn ghost" value="demo">${isDemo() ? '🧪 Disattiva la modalità prova' : '🧪 Modalità prova: timbra anche fuori sede'}</button>
       <button class="btn ghost" value="pwd">🔑 Cambia password</button>
       <button class="btn ghost danger-text" value="reset">🧹 Azzera tutto e parti da zero</button>
@@ -2711,6 +2717,7 @@ function adminHome() {
       assenze: () => call('assenze', null, 'Carico ferie e permessi', out => adminAbsences(out.assenze)),
       pwd: adminChangePassword,
       sede: () => adminSede(),
+      foreco: () => adminZonaForeco(),
       invito: () => call('codice', null, 'Preparo il link', out => adminInvite(out.codice)),
       demo: () => { setDemo(!isDemo()); adminHome(); },
       reset: adminReset,
@@ -3057,6 +3064,36 @@ function adminSede(msg) {
     });
 }
 const save_ = () => save();
+// Punto FORECO: dove si timbra alla discarica di Gello
+function adminZonaForeco(msg) {
+  const z = cfg().zonaForeco || ZONA_FORECO;
+  openDialog(`
+    <h3>📍 Punto FORECO</h3>
+    <p>Chi va a FORECO timbra entro <b>${z.raggio} m</b> da questo punto (discarica di Gello). Il punto di partenza è indicativo: centralo quando sei lì.</p>
+    ${msg ? `<p class="err">${esc(msg)}</p>` : ''}
+    <a class="btn ghost" href="https://maps.google.com/?q=${z.lat},${z.lng}" target="_blank" rel="noopener">Vedi il punto sulla mappa</a>
+    <label>Raggio<select name="raggio">${[200, 300, 500, 800, 1000].map(r => `<option value="${r}" ${r === z.raggio ? 'selected' : ''}>${r} metri</option>`).join('')}</select></label>
+    <button class="btn" value="here">📍 Sono alla discarica: usa la mia posizione</button>
+    <div class="row"><button class="btn ghost" value="back" formnovalidate>Indietro</button><button class="btn ghost" value="raggio">Salva solo il raggio</button></div>`,
+    (a, fd) => {
+      if (a === 'back') return setTimeout(adminHome, 50);
+      const raggio = Number(fd.get('raggio'));
+      const salva = (lat, lng) => call('zonaforeco', { zona: { lat, lng, raggio } }, 'Salvo il punto FORECO', out => {
+        db.config = Object.assign({}, db.config, { zonaForeco: out.zona }); save_();
+        toast('Punto FORECO salvato ✓'); adminZonaForeco();
+      });
+      if (a === 'raggio') return setTimeout(() => salva(z.lat, z.lng), 50);
+      if (a === 'here') {
+        setTimeout(async () => {
+          busy('Rilevo la tua posizione');
+          const pos = await getPos();
+          if (pos.errore) return adminZonaForeco('Posizione non disponibile: ' + pos.errore);
+          if (pos.acc > 100) return adminZonaForeco(`Segnale GPS poco preciso (±${Math.round(pos.acc)} m): riprova all'aperto.`);
+          salva(pos.lat, pos.lng);
+        }, 50);
+      }
+    });
+}
 
 // --- Azzeramento
 function adminReset(msg) {

@@ -367,7 +367,7 @@ function pDashboard() {
     `<p class="foot">Dati dal registro Google di Timbra Cantieri · aggiornati all'apertura · ${S.demo ? 'modalità prova' : 'tocca ↻ per aggiornare'}</p>`;
 }
 function turnoOrario(turno, cantiere) {
-  if (isForeco(cantiere)) return ' · 3 h 30';
+  if (isForeco(cantiere)) return ' 07–10:30';
   if (impianto(cantiere)) return /ECOFOR/i.test(cantiere) ? ' 07–15:30' : ' 08–16';
   const t = TURNI.find(x => x.nome === turno); return t ? ' ' + t.orario : '';
 }
@@ -873,6 +873,7 @@ function pImpostazioni() {
     <article class="card"><h2>Cantieri</h2><p class="sub">${S.cantieri.filter(c => c.attivo !== false).length} attivi su ${S.cantieri.length}: ${esc(S.cantieri.filter(c => c.attivo !== false).map(c => cap(c.nome)).join(', '))}</p>
       <button class="btn ghost" data-act="sites">Aggiungi, rinomina, colori</button></article>
     <article class="card"><h2>Sede per le timbrature</h2>${sedeTxt()}<button class="btn ghost" data-act="sede">Cambia sede o raggio</button></article>
+    <article class="card"><h2>Punto FORECO</h2>${forecoTxt()}<button class="btn ghost" data-act="foreco">Centra il punto della discarica</button></article>
     <article class="card"><h2>Operatori</h2><p class="sub">Chi compare nel programma, ore settimanali da contratto e cantiere fisso.</p><button class="btn ghost" data-act="ops">${icon('dipendenti')}Gestisci operatori</button></article>
     <article class="card"><h2>App degli operatori</h2><p class="sub">Le timbrature si fanno dall'app Timbra Cantieri sul telefono di ogni operatore. Azzerare tutto il registro si fa ancora da lì.</p>
       <a class="btn plain" href="${APP_URL}" target="_blank" rel="noopener">Apri Timbra Cantieri</a></article></div>`;
@@ -956,9 +957,40 @@ function sitesEdit() {
 function needSede() {
   if ('sede' in S.cache || S.loading.sede) return S.cache.sede;
   S.loading.sede = true;
-  const p = S.demo ? Promise.resolve({ lat: 43.7080, lng: 10.4210, raggio: 200 }) : queued('codice').then(o => withTimeout(fetch(`${ENDPOINT}?azione=cantieri&codice=${encodeURIComponent(o.codice || '')}`), 30000)).then(r => r.json()).then(j => (j.config && j.config.sede) || {});
-  p.then(s => { S.cache.sede = s || {}; }, e => { S.cache.sede = { error: why(e) }; }).finally(() => { delete S.loading.sede; renderPage(); });
+  const p = S.demo ? Promise.resolve({ sede: { lat: 43.7080, lng: 10.4210, raggio: 200 }, zonaForeco: ZONA_FORECO }) : queued('codice').then(o => withTimeout(fetch(`${ENDPOINT}?azione=cantieri&codice=${encodeURIComponent(o.codice || '')}`), 30000)).then(r => r.json()).then(j => j.config || {});
+  p.then(c => { S.cache.sede = c.sede || {}; S.cache.zonaForeco = c.zonaForeco || ZONA_FORECO; }, e => { S.cache.sede = { error: why(e) }; }).finally(() => { delete S.loading.sede; renderPage(); });
   return undefined;
+}
+const ZONA_FORECO = { nome: 'Foreco – discarica di Gello, Pontedera', lat: 43.6492, lng: 10.5725, raggio: 1000 };
+function forecoTxt() {
+  const s = needSede();
+  if (s === undefined) return '<p class="sub">Carico…</p>';
+  const z = S.cache.zonaForeco || ZONA_FORECO;
+  return `<p class="sub">Chi va a FORECO (lun-mer-ven, 07:00–10:30) timbra entro <b style="color:var(--ink)">${z.raggio} m</b> dalla discarica di Gello. <a href="https://maps.google.com/?q=${z.lat},${z.lng}" target="_blank" rel="noopener" style="color:var(--accent);font-weight:700">Vedi sulla mappa</a></p>`;
+}
+function forecoEdit() {
+  const z = S.cache.zonaForeco || ZONA_FORECO;
+  openDlg(`<form id="zfForm" style="display:grid;gap:12px"><h2>Punto FORECO</h2>
+    <p class="sub">Il punto di partenza è indicativo. Quando sei alla discarica di Gello premi il pulsante: da lì gli operatori FORECO potranno timbrare entro il raggio scelto.</p>
+    <a class="btn plain" href="https://maps.google.com/?q=${z.lat},${z.lng}" target="_blank" rel="noopener">Vedi il punto sulla mappa</a>
+    <label class="field">Raggio${sel('raggio', [200, 300, 500, 800, 1000].map(r => [r, r + ' metri']), z.raggio)}</label>
+    <button type="button" class="btn" id="zfHere">Sono alla discarica: usa la mia posizione</button>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn ghost" type="submit">Salva solo il raggio</button></div></form>`);
+  const save = async (lat, lng) => {
+    const raggio = Number(new FormData($('#zfForm')).get('raggio'));
+    dlg.close(); toast('Salvo il punto FORECO…');
+    try { const out = await queued('zonaforeco', { zona: { lat, lng, raggio } }); S.cache.zonaForeco = out.zona || { lat, lng, raggio }; toast('Punto FORECO salvato'); } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  };
+  $('#zfForm').addEventListener('submit', e => { e.preventDefault(); save(z.lat, z.lng); });
+  $('#zfHere').addEventListener('click', e => {
+    if (!navigator.geolocation) return toast('Posizione non disponibile su questo dispositivo');
+    e.target.disabled = true; e.target.textContent = 'Rilevo la posizione…';
+    navigator.geolocation.getCurrentPosition(p => {
+      if (p.coords.accuracy > 100) { e.target.disabled = false; e.target.textContent = 'Sono alla discarica: usa la mia posizione'; return toast(`Segnale GPS poco preciso (±${Math.round(p.coords.accuracy)} m): riprova all'aperto`); }
+      save(p.coords.latitude, p.coords.longitude);
+    }, err => { e.target.disabled = false; e.target.textContent = 'Sono alla discarica: usa la mia posizione'; toast('Posizione non disponibile: ' + err.message); }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+  });
 }
 function sedeEdit() {
   const s = S.cache.sede || {};
@@ -1219,6 +1251,7 @@ document.addEventListener('click', e => {
     case 'newInt': if (!S.cache.interventi) needInt(); return intForm(null);
     case 'sites': return sitesEdit();
     case 'sede': return sedeEdit();
+    case 'foreco': return forecoEdit();
     case 'dpiNew': return dpiNew();
     case 'capi': return capiEdit();
     case 'printOrder': return printOrder();
@@ -1338,6 +1371,7 @@ async function demoApi(azione, x) {
     case 'operatori': D.operatori = clone(x.operatori); D.scad.operatori = D.operatori; D.dpi.operatori = D.operatori; return ok({ operatori: D.operatori });
     case 'salva': D.cantieri = x.cantieri.map(c => Object.assign({}, c, { nome: c.nome.toUpperCase() })); return ok({ cantieri: D.cantieri });
     case 'sede': return ok({ sede: x.sede });
+    case 'zonaforeco': return ok({ zona: x.zona });
     case 'dpiconsegna': x.consegna.righe.forEach((r, i) => { const c = D.dpi.capi.find(k => k.nome === r.capo) || { mesi: 0 }; const dd = dayOf(x.consegna.data); dd.setMonth(dd.getMonth() + c.mesi);
       D.dpi.consegne.unshift({ id: x.consegna.id + '-' + i, data: x.consegna.data, operatore: x.consegna.operatore, capo: r.capo, taglia: r.taglia, qta: r.qta, scadenza: c.mesi ? isoOf(dd) : '', note: x.consegna.note }); });
       if (x.consegna.taglie) D.dpi.taglie[x.consegna.operatore.toLowerCase()] = x.consegna.taglie; return ok(D.dpi);
