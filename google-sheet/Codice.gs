@@ -1062,6 +1062,9 @@ function foglioOperatori_() {
   if (sh.getRange(1, 4).getValue() !== 'Cantiere fisso') {
     sh.getRange(1, 4).setValue('Cantiere fisso').setFontWeight('bold').setBackground('#e7f2ea');
   }
+  if (sh.getRange(1, 5).getValue() !== 'Assunto il') {
+    sh.getRange(1, 5, 1, 3).setValues([['Assunto il', 'Contratto', 'Scadenza contratto']]).setFontWeight('bold').setBackground('#e7f2ea');
+  }
   return sh;
 }
 
@@ -1079,10 +1082,11 @@ function nomiDaTimbrature_() {
 /** Operatori da scegliere: quelli della scheda "Operatori" più chi ha già timbrato. */
 function operatori_() {
   const sh = foglioOperatori_();
-  const elenco = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 4).getValues()
+  const iso = v => v instanceof Date ? dataIso_(v) : (daIso_(v) ? String(v) : '');
+  const elenco = sh.getLastRow() > 1 ? sh.getRange(2, 1, sh.getLastRow() - 1, 7).getValues()
     .filter(r => String(r[0]).trim())
     .map(r => ({ nome: String(r[0]).trim(), attivo: String(r[1]).trim().toUpperCase() !== 'NO', ore: Number(r[2]) || 30,
-      fisso: String(r[3] || '').trim().toUpperCase() })) : [];
+      fisso: String(r[3] || '').trim().toUpperCase(), assunzione: iso(r[4]), contratto: String(r[5] || '').trim(), scadenzaContratto: iso(r[6]) })) : [];
   const noti = {};
   elenco.forEach(o => { noti[o.nome.toLowerCase()] = true; });
   // Chi è in elenco con il solo cognome (es. "Grandoni") non ricompare con nome e cognome preso dalle timbrature
@@ -1095,16 +1099,23 @@ function salvaOperatori_(lista) {
   if (!Array.isArray(lista)) return;
   const visti = {};
   const righe = [];
+  // Assunzione e contratto: se chi salva non li manda (app vecchia), restano quelli già scritti
+  const prima = {};
+  operatori_().forEach(o => { prima[o.nome.toLowerCase()] = o; });
+  const data = v => daIso_(v) || '';
   lista.forEach(o => {
     const nome = String(o && o.nome || '').trim().replace(/\s+/g, ' ').slice(0, 60);
     if (!nome || visti[nome.toLowerCase()]) return;
     visti[nome.toLowerCase()] = true;
+    const p = prima[nome.toLowerCase()] || {};
+    const campo = k => (k in o ? o[k] : p[k]) || '';
     righe.push([nome, o.attivo === false ? 'NO' : 'SI', Math.max(1, Math.min(60, Number(o.ore) || 30)),
-      String(o.fisso || '').trim().toUpperCase().slice(0, 60)]);
+      String(o.fisso || '').trim().toUpperCase().slice(0, 60),
+      data(campo('assunzione')), String(campo('contratto')).slice(0, 40), data(campo('scadenzaContratto'))]);
   });
   const sh = foglioOperatori_();
-  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 4).clearContent();
-  if (righe.length) sh.getRange(2, 1, righe.length, 4).setValues(righe);
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 7).clearContent();
+  if (righe.length) sh.getRange(2, 1, righe.length, 7).setValues(righe);
 }
 
 /** Cantiere fisso dell'operatore (impianto dove lavora sempre), cercato per nome e cognome o solo cognome. */

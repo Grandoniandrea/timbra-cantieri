@@ -81,7 +81,7 @@ const VIEWS = {
   richieste: ['Ferie e richieste', 'Ore extra, ferie, permessi e malattia da approvare.'],
   dpi: ['DPI e vestiario', 'Consegne, scadenze e cosa ordinare.'],
   statistiche: ['Statistiche', 'Ore del mese per cantiere e per dipendente.'],
-  dipendenti: ['Dipendenti', 'Visite mediche e corsi di formazione: scadenze.'],
+  dipendenti: ['Dipendenti', 'Contratti, visite mediche e corsi: dati e scadenze.'],
   impostazioni: ['Impostazioni', 'Link di invito, password e app.']
 };
 const MENU = ['dashboard', 'timbrature', 'programma', 'interventi', 'richieste', 'dpi', 'statistiche', 'dipendenti'];
@@ -674,7 +674,7 @@ async function opsEdit() {
     e.preventDefault();
     const f = new FormData(e.target), on = new Set(f.getAll('on').map(Number));
     const ren = {};
-    const lista = ops.map((p, i) => { const raw = String(f.get('nome' + i) || '').trim().replace(/\s+/g, ' '); const nn = !raw || raw.toLowerCase() === p.nome.toLowerCase() ? p.nome : cap(raw); if (nn !== p.nome) ren[p.nome.toLowerCase()] = nn; return { nome: nn, attivo: on.has(i), ore: Number(String(f.get('ore' + i) || '').replace(',', '.')) || 30, fisso: String(f.get('fisso' + i) || '') }; });
+    const lista = ops.map((p, i) => { const raw = String(f.get('nome' + i) || '').trim().replace(/\s+/g, ' '); const nn = !raw || raw.toLowerCase() === p.nome.toLowerCase() ? p.nome : cap(raw); if (nn !== p.nome) ren[p.nome.toLowerCase()] = nn; return { nome: nn, attivo: on.has(i), ore: Number(String(f.get('ore' + i) || '').replace(',', '.')) || 30, fisso: String(f.get('fisso' + i) || ''), assunzione: p.assunzione || '', contratto: p.contratto || '', scadenzaContratto: p.scadenzaContratto || '' }; });
     String(f.get('nuovo') || '').split(/[\n,;]+/).map(v => cap(v.trim().replace(/\s+/g, ' '))).filter(Boolean).forEach(n => { if (!lista.some(p => sameName(p.nome, n))) lista.push({ nome: n, attivo: true, ore: 30, fisso: '' }); });
     dlg.close(); toast('Salvo gli operatori…');
     try {
@@ -900,7 +900,10 @@ function pDipendenti() {
   const ult = scUltime(sc);
   const voci = sc.voci.filter(v => v.attiva).map(v => v.nome);
   const ops = (sc.operatori || []).filter(o => o.attivo !== false).map(o => o.nome).filter(n => match(n));
-  const vic = scVicine(sc).filter(r => match(r.operatore, r.voce));
+  const vic = scVicine(sc).filter(r => match(r.operatore, r.voce))
+    .concat((sc.operatori || []).filter(o => o.attivo !== false && o.scadenzaContratto && daysTo(o.scadenzaContratto) <= FINESTRA_SCAD && match(o.nome))
+      .map(o => ({ operatore: o.nome, voce: 'Contratto a tempo determinato', scadenza: o.scadenzaContratto, contratto: true })))
+    .sort((a, b) => a.scadenza.localeCompare(b.scadenza));
   const cell = (op, voce) => {
     const r = ult.find(x => sameName(x.operatore, op) && sameName(x.voce, voce));
     if (!r) return `<button data-screg="${esc(op)}|${esc(voce)}" aria-label="Registra ${esc(voce)} per ${esc(op)}" style="color:#9a9a96">+ registra</button>`;
@@ -908,15 +911,67 @@ function pDipendenti() {
     const cls = g === null ? '' : g < 0 ? 'no' : g <= FINESTRA_SCAD ? 'wait' : '';
     return `<button data-scedit="${esc(r.id)}" aria-label="Modifica ${esc(voce)} di ${esc(op)}">${cls ? chip(cls, fmtIso(r.scadenza)) : r.scadenza ? fmtIso(r.scadenza) : 'fatto ' + fmtIso(r.fatto)}</button>`;
   };
+  const ctr = contrattiHtml(sc);
   return head(`<button class="btn" data-act="scNew">${icon('plus')}Registra visita o corso</button><button class="btn ghost" data-act="scVoci">Visite, corsi e durata</button><button class="btn plain" data-act="ops">${icon('dipendenti')}Operatori</button>`) +
     `<article class="card"><div class="card-head"><h2>In scadenza</h2><small>scaduti e nei prossimi ${FINESTRA_SCAD} giorni</small></div>
-    <div class="rows">${vic.map(r => `<div class="row"><div class="ini c${daysTo(r.scadenza) < 0 ? 3 : 0}" aria-hidden="true">${esc(initials(r.operatore))}</div><div class="txt"><b>${esc(r.operatore)}</b><span>${esc(r.voce)} · ${fmtIso(r.scadenza)}</span></div>${chip(daysTo(r.scadenza) < 0 ? 'no' : 'wait', scTxt(r))}<button class="btn plain sm" data-screg="${esc(r.operatore)}|${esc(r.voce)}">Rinnova</button></div>`).join('') || '<p class="empty">Niente in scadenza. ✓</p>'}</div></article>
+    <div class="rows">${vic.map(r => `<div class="row"><div class="ini c${daysTo(r.scadenza) < 0 ? 3 : 0}" aria-hidden="true">${esc(initials(r.operatore))}</div><div class="txt"><b>${esc(r.operatore)}</b><span>${esc(r.voce)} · ${fmtIso(r.scadenza)}</span></div>${chip(daysTo(r.scadenza) < 0 ? 'no' : 'wait', scTxt(r))}${r.contratto ? `<button class="btn plain sm" data-ctredit="${esc(r.operatore)}">Aggiorna</button>` : `<button class="btn plain sm" data-screg="${esc(r.operatore)}|${esc(r.voce)}">Rinnova</button>`}</div>`).join('') || '<p class="empty">Niente in scadenza. ✓</p>'}</div></article>
+    ${ctr}
+    <h2 style="font:600 18px var(--font-b);margin-top:6px">Visite mediche e corsi</h2>
     <div class="table-box"><table><thead><tr><th>Dipendente</th>${voci.map(v => `<th>${esc(v.length > 22 ? v.slice(0, 20) + '…' : v)}</th>`).join('')}</tr></thead><tbody>
     ${ops.map(o => `<tr><td class="name">${esc(o)}</td>${voci.map(v => `<td class="cellbtn">${cell(o, v)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${voci.length + 1}" class="empty">Nessun dipendente.</td></tr>`}
     </tbody></table></div>`;
 }
 
 // ---------- Impostazioni ----------
+// ---------- Contratti dei dipendenti ----------
+const CONTRATTI = ['Tempo indeterminato', 'Tempo determinato', 'Apprendistato', 'Somministrazione (agenzia)', 'Altro'];
+function contrattiHtml(sc) {
+  const ops = (sc.operatori || []).filter(o => o.attivo !== false && match(o.nome));
+  const anz = iso => { if (!iso) return ''; const m = Math.floor((dayOf(todayIso()) - dayOf(iso)) / (864e5 * 30.44)); return m < 12 ? (m <= 1 ? (m === 1 ? '1 mese' : 'meno di un mese') : `${m} mesi`) : `${Math.floor(m / 12)} ${Math.floor(m / 12) === 1 ? 'anno' : 'anni'}${m % 12 ? ` e ${m % 12} ${m % 12 === 1 ? 'mese' : 'mesi'}` : ''}`; };
+  const scad = o => {
+    if (o.contratto !== 'Tempo determinato') return '<span class="small" style="color:#9a9a96">—</span>';
+    if (!o.scadenzaContratto) return chip('wait', 'Manca la data');
+    const g = daysTo(o.scadenzaContratto);
+    return g < 0 ? chip('no', `Scaduto il ${fmtIso(o.scadenzaContratto)}`) : g <= FINESTRA_SCAD ? chip('wait', `${fmtIso(o.scadenzaContratto)} · tra ${g} g`) : fmtIso(o.scadenzaContratto);
+  };
+  const det = ops.filter(o => o.contratto === 'Tempo determinato').length, ind = ops.filter(o => o.contratto === 'Tempo indeterminato').length;
+  return `<div class="card-head" style="margin-top:6px"><h2 style="font:600 18px var(--font-b)">Contratti</h2><small>${ind} a tempo indeterminato · ${det} a tempo determinato${ops.length - ind - det ? ` · ${ops.length - ind - det} altri o da compilare` : ''}</small></div>
+    <div class="table-box"><table><thead><tr><th>Dipendente</th><th>Assunto il</th><th>Anzianità</th><th>Contratto</th><th>Ore/sett.</th><th>Scadenza</th><th></th></tr></thead><tbody>
+    ${ops.map(o => `<tr data-ctredit="${esc(o.nome)}"><td class="name">${esc(o.nome)}</td><td>${o.assunzione ? fmtIso(o.assunzione) : '<span class="small" style="color:#9a9a96">da inserire</span>'}</td>
+      <td>${esc(anz(o.assunzione))}</td><td>${esc(o.contratto || '—')}</td><td>${fmtH(o.ore || 30)} h${(o.ore || 30) < 38 ? '<span class="small">part-time</span>' : ''}</td><td>${scad(o)}</td>
+      <td><button class="btn plain sm" data-ctredit="${esc(o.nome)}">Modifica</button></td></tr>`).join('') || '<tr><td colspan="7" class="empty">Nessun dipendente attivo.</td></tr>'}
+    </tbody></table></div>`;
+}
+function ctrEdit(nome) {
+  const sc = S.cache.scad; const ops = sc && sc.operatori; if (!ops) return;
+  const o = ops.find(x => sameName(x.nome, nome)); if (!o) return;
+  openDlg(`<form id="ctrForm" style="display:grid;gap:12px"><h2>${esc(o.nome)}</h2><p class="sub">Dati del rapporto di lavoro</p>
+    <label class="field">Data di assunzione<input type="date" name="assunzione" value="${esc(o.assunzione || '')}"></label>
+    <label class="field">Tipo di contratto${sel('contratto', [['', 'Scegli…']].concat(CONTRATTI.map(c => [c, c])), o.contratto || '', 'id="ctrTipo"')}</label>
+    <label class="field">Ore settimanali<input name="ore" inputmode="decimal" value="${esc(o.ore || 30)}"></label>
+    <label class="field" id="ctrScadBox">Scadenza del contratto<input type="date" name="scadenza" value="${esc(o.scadenzaContratto || '')}"></label>
+    <p class="sub">Le ore settimanali sono le stesse usate nello specchietto ore del programma.</p>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Salva</button></div></form>`);
+  const tog = () => { const det = $('#ctrTipo').value === 'Tempo determinato'; $('#ctrScadBox').hidden = !det; };
+  $('#ctrTipo').addEventListener('change', tog); tog();
+  $('#ctrForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target), tipo = String(f.get('contratto') || '');
+    if (tipo === 'Tempo determinato' && !f.get('scadenza')) return toast('Per il tempo determinato serve la data di scadenza');
+    const lista = ops.map(x => sameName(x.nome, o.nome) ? Object.assign({}, x, { assunzione: String(f.get('assunzione') || ''), contratto: tipo,
+      ore: Number(String(f.get('ore') || '').replace(',', '.')) || 30, scadenzaContratto: tipo === 'Tempo determinato' ? String(f.get('scadenza') || '') : '' }) : x);
+    dlg.close(); toast('Salvo…');
+    try {
+      const out = await queued('operatori', { operatori: lista });
+      S.cache.scad = Object.assign({}, S.cache.scad, { operatori: out.operatori || lista });
+      Object.keys(S.cache).filter(k => k.startsWith('p:') || ['interventi', 'dpi'].includes(k)).forEach(k => { if (!(S.plan && S.plan.dirty && k === 'p:' + S.plan.week)) delete S.cache[k]; });
+      if (S.plan && !S.plan.dirty) S.plan = null;
+      toast('Dati del contratto salvati');
+    } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage();
+  });
+}
+
 function pImpostazioni() {
   return head() + `<div class="grid g-2">
     <article class="card"><h2>Link di invito</h2><p class="sub">Ogni operatore lo apre una volta sul suo telefono: da lì le sue timbrature vengono accettate. Non pubblicarlo nei gruppi aperti.</p>
@@ -1328,7 +1383,7 @@ function moreMenu() {
 // ---------- Eventi ----------
 document.addEventListener('click', e => {
   if (document.body.classList.contains('printing')) endPrint();
-  const el = e.target.closest('[data-accedit],[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy]');
+  const el = e.target.closest('[data-ctredit],[data-accedit],[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy]');
   if (!el) return;
   const d = el.dataset;
   if (d.go) return go(d.go);
@@ -1336,6 +1391,7 @@ document.addEventListener('click', e => {
   if (d.if) { S.iFilter = d.if; return renderPage(); }
   if (d.week) return changeWeek(d.week === '0' ? mondayOf(todayIso()) : addDays(S.week || mondayOf(todayIso()), Number(d.week)));
   if (d.accedit) return accEdit(d.accedit);
+  if (d.ctredit) return ctrEdit(d.ctredit);
   if (d.tedit) return tEdit(d.tedit);
   if (d.dedit) return dpiEdit(d.dedit);
   if (d.screg) { const [op, voce] = d.screg.split('|'); return scReg({ operatore: op, voce }); }
@@ -1441,7 +1497,8 @@ function demoBuild() {
     squadre.push({ id: 'ds' + i + 'c', data: d, turno: 'Pomeriggio', cantiere: 'CASCINA', operatori: [i === 2 ? ops[6] : ops[3]] });
   }
   squadre.push({ id: 'dsf', data: addDays(mon, 3), turno: 'Ferie', cantiere: '', operatori: [ops[7]] });
-  const operatori = ops.map((o, i) => ({ nome: o, attivo: true, ore: i === 2 || i === 4 ? 40 : 30, fisso: i === 4 ? 'ECOFOR SERVICE' : i === 2 ? 'ECOACCIAI' : '' }));
+  const operatori = ops.map((o, i) => ({ nome: o, attivo: true, ore: i === 2 || i === 4 ? 40 : 30, fisso: i === 4 ? 'ECOFOR SERVICE' : i === 2 ? 'ECOACCIAI' : '',
+    assunzione: addDays(today, -200 - i * 150), contratto: i % 3 === 1 ? 'Tempo determinato' : 'Tempo indeterminato', scadenzaContratto: i % 3 === 1 ? addDays(today, 20 + i * 30) : '' }));
   return {
     t, squadre, operatori,
     extra: t.filter(x => x.statoExtra === 'Da autorizzare').map(x => Object.assign({}, x, { motivo: ['Guasto del mezzo', 'Foratura', 'Traffico per incidente'][x.id.length % 3], nota: '' })),
@@ -1497,7 +1554,7 @@ async function demoApi(azione, x) {
     case 'modifica': D.t.forEach(t => { if (t.id === x.t.id) Object.assign(t, { start: x.t.start, end: x.t.end, cantiere: x.t.cantiere }); }); return ok({});
     case 'elimina': D.t = D.t.filter(t => t.id !== x.id); return ok({});
     case 'salvaprogramma': D.squadre = D.squadre.filter(s => s.data < x.da || s.data > x.a).concat(clone(x.squadre)); return ok({ squadre: D.squadre.filter(s => s.data >= x.da && s.data <= x.a), operatori: D.operatori, cantieri: DEMO_SITES() });
-    case 'operatori': D.operatori = clone(x.operatori); D.scad.operatori = D.operatori; D.dpi.operatori = D.operatori; return ok({ operatori: D.operatori });
+    case 'operatori': D.operatori = clone(x.operatori).map(o => Object.assign({ assunzione: '', contratto: '', scadenzaContratto: '' }, (D.operatori.find(p => p.nome === o.nome) || {}), o)); D.scad.operatori = D.operatori; D.dpi.operatori = D.operatori; return ok({ operatori: D.operatori });
     case 'salva': D.cantieri = x.cantieri.map(c => Object.assign({}, c, { nome: c.nome.toUpperCase() })); return ok({ cantieri: D.cantieri });
     case 'sede': return ok({ sede: x.sede });
     case 'zonaforeco': return ok({ zona: x.zona });
