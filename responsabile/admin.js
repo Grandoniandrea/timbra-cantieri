@@ -138,6 +138,7 @@ function renderLogin(msg) {
       <p class="msg" id="loginMsg">${esc(msg || '')}</p>
       <button class="btn block" type="submit" id="loginBtn">Entra</button>
       <button class="btn plain block" type="button" data-act="demo">Prova con dati finti</button>
+      <button class="link" type="button" data-act="forgot" style="justify-self:center">Password dimenticata?</button>
       <p class="sub" style="color:var(--muted);font-size:13px">Sull'iPhone: Condividi → <b>Aggiungi alla schermata Home</b> per averla come app.</p>
     </form>
   </main>`;
@@ -154,6 +155,45 @@ function renderLogin(msg) {
       }
       enter(out);
     } catch (err) { S.pwd = null; renderLogin(why(err)); }
+  });
+}
+// Password dimenticata: codice di 6 cifre via email al responsabile, poi password nuova
+const rawAdmin = (azione, extra) => withTimeout(fetch(ENDPOINT, { method: 'POST', body: JSON.stringify({ admin: Object.assign({ azione }, extra || {}) }) }).then(r => r.json()), 30000);
+function forgot() {
+  openDlg(`<h2>Password dimenticata</h2>
+    <p class="sub">Mandiamo un codice di 6 cifre all'email del responsabile (quella dell'account Google dello script). Con il codice crei una password nuova.</p>
+    <p class="msg" id="fgMsg"></p>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button type="button" class="btn" id="fgSend">Invia il codice</button></div>`);
+  $('#fgSend').addEventListener('click', async e => {
+    e.target.disabled = true; e.target.textContent = 'Invio…';
+    try {
+      const out = await rawAdmin('recupera');
+      if (!out.ok && out.error !== 'attendi') { $('#fgMsg').textContent = out.error === 'nopass' ? 'La password non è ancora stata creata: creala dall\'app Timbra Cantieri (5 tocchi sul logo).' : (out.msg || 'Questa funzione richiede lo script Google aggiornato.'); e.target.disabled = false; e.target.textContent = 'Invia il codice'; return; }
+      forgotCode(out.email, out.ok ? '' : out.msg);
+    } catch (err) { $('#fgMsg').textContent = why(err); e.target.disabled = false; e.target.textContent = 'Invia il codice'; }
+  });
+}
+function forgotCode(email, note) {
+  openDlg(`<form id="fgForm" style="display:grid;gap:12px"><h2>Nuova password</h2>
+    <p class="sub">${email ? `Codice inviato a <b style="color:var(--ink)">${esc(email)}</b>. ` : ''}${esc(note || '')} Vale 15 minuti; controlla anche lo spam.</p>
+    <label class="field">Codice ricevuto<input name="codice" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></label>
+    <label class="field">Nuova password<input type="password" name="p1" minlength="6" required autocomplete="new-password"></label>
+    <label class="field">Ripeti la password<input type="password" name="p2" minlength="6" required autocomplete="new-password"></label>
+    <p class="msg" id="fgMsg"></p>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Salva ed entra</button></div></form>`);
+  $('#fgForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target), p1 = String(f.get('p1')), p2 = String(f.get('p2'));
+    if (p1 !== p2) { $('#fgMsg').textContent = 'Le due password non coincidono.'; return; }
+    const btn = e.target.querySelector('[type=submit]'); btn.disabled = true; btn.textContent = 'Salvo…';
+    try {
+      const out = await rawAdmin('reimposta', { codice: String(f.get('codice')).trim(), nuova: p1 });
+      if (!out.ok) { $('#fgMsg').textContent = out.msg || 'Non è andata.'; btn.disabled = false; btn.textContent = 'Salva ed entra'; return; }
+      S.pwd = p1; S.demo = false;
+      const lg = await rawAdmin('leggi', { password: p1 });
+      dlg.close();
+      if (lg.ok) { enter(lg); toast('Password nuova salvata'); } else renderLogin('Password salvata: ora entra con quella nuova.');
+    } catch (err) { $('#fgMsg').textContent = why(err); btn.disabled = false; btn.textContent = 'Salva ed entra'; }
   });
 }
 function enter(out) {
@@ -1171,6 +1211,7 @@ document.addEventListener('click', e => {
   switch (d.act) {
     case 'demo': S.demo = true; S.pwd = null; return demoApi('leggi').then(enter);
     case 'logout': return logout();
+    case 'forgot': return forgot();
     case 'refresh': return refresh();
     case 'more': return moreMenu();
     case 'close': return dlg.close();

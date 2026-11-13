@@ -176,6 +176,42 @@ function foglioCantieri_() {
   return sh;
 }
 
+// ---------- Password dimenticata: codice via email al responsabile ----------
+// Il codice (6 cifre) vale 15 minuti; massimo 5 tentativi; un nuovo invio ogni 2 minuti.
+const mascheraEmail_ = e => String(e).replace(/^(.)[^@]*(@.*)$/, (m, a, b) => a + '•••' + b);
+function recuperaPassword_() {
+  const cache = CacheService.getScriptCache();
+  if (cache.get('recupero_inviato')) return { ok: false, error: 'attendi', msg: 'Codice già inviato: controlla la posta (anche lo spam) o riprova tra 2 minuti.' };
+  const to = EMAIL_RESPONSABILE || Session.getEffectiveUser().getEmail();
+  if (!to) return { ok: false, error: 'noemail', msg: 'Nessuna email del responsabile impostata nello script.' };
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Utilities.getUuid() + Date.now());
+  const n = bytes.slice(0, 4).reduce((s, b) => (s * 256 + (b & 255)) % 1000000, 0);
+  const codice = String(n).padStart(6, '0');
+  cache.put('codice_recupero', codice, 900);
+  cache.put('tentativi_recupero', '0', 900);
+  cache.put('recupero_inviato', '1', 120);
+  MailApp.sendEmail({
+    to, subject: 'Timbra Cantieri: codice per una nuova password',
+    htmlBody: '<p>Hai chiesto di creare una nuova password del responsabile per Timbra Cantieri.</p>' +
+      '<p style="font-size:28px;font-weight:bold;letter-spacing:4px">' + codice + '</p>' +
+      '<p>Il codice vale 15 minuti. Se non l\'hai chiesto tu, ignora questa email: la password attuale resta valida.</p>'
+  });
+  return { ok: true, email: mascheraEmail_(to) };
+}
+function reimpostaPassword_(req) {
+  const cache = CacheService.getScriptCache();
+  const giusto = cache.get('codice_recupero');
+  if (!giusto) return { ok: false, error: 'scaduto', msg: 'Il codice è scaduto o non è stato chiesto: chiedine uno nuovo.' };
+  const t = Number(cache.get('tentativi_recupero') || 0);
+  if (t >= 5) { cache.remove('codice_recupero'); return { ok: false, error: 'scaduto', msg: 'Troppi tentativi: chiedi un nuovo codice.' }; }
+  if (String(req.codice || '').trim() !== giusto) { cache.put('tentativi_recupero', String(t + 1), 900); return { ok: false, error: 'codice', msg: 'Codice sbagliato.' }; }
+  const nuova = String(req.nuova || '');
+  if (nuova.length < 6) return { ok: false, error: 'corta', msg: 'La password deve avere almeno 6 caratteri.' };
+  PropertiesService.getScriptProperties().setProperty('PASSWORD_ADMIN', nuova);
+  ['codice_recupero', 'tentativi_recupero', 'tentativi_admin'].forEach(k => cache.remove(k));
+  return { ok: true };
+}
+
 // ---------- Gestione cantieri dall'app (protetta da password) ----------
 // La password si imposta in Impostazioni progetto → Proprietà script → PASSWORD_ADMIN.
 
@@ -190,6 +226,9 @@ function admin_(req) {
     props.setProperty('PASSWORD_ADMIN', nuova);
     return { ok: true };
   }
+  // Password dimenticata: si chiede un codice via email e si crea una password nuova
+  if (req.azione === 'recupera') return recuperaPassword_();
+  if (req.azione === 'reimposta') return reimpostaPassword_(req);
   const cache = CacheService.getScriptCache();
   const tentativi = Number(cache.get('tentativi_admin') || 0);
   if (tentativi >= 5) return { ok: false, error: 'bloccato', msg: 'Troppi tentativi sbagliati. Riprova tra 15 minuti.' };
