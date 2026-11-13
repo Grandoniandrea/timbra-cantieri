@@ -77,7 +77,9 @@ h1, h2, h3, p { margin: 0; }
 .icon-btn { width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--line); background: #fff; display: flex; align-items: center; justify-content: center; position: relative; flex: none; }
 .icon-btn svg { width: 18px; height: 18px; }
 .dot { position: absolute; top: 8px; right: 9px; width: 9px; height: 9px; border-radius: 50%; background: var(--red); border: 2px solid #fff; }
-.me { display: flex; align-items: center; gap: 10px; }
+.me { display: flex; align-items: center; gap: 10px; border: 0; background: transparent; padding: 4px 6px 4px 4px; border-radius: 999px; text-align: left; min-height: 44px; }
+.me:hover { background: #eef0e8; }
+.me .chev { width: 16px; height: 16px; color: var(--muted); flex: none; }
 .avatar { width: 42px; height: 42px; flex: none; border-radius: 50%; background: var(--grey); color: #fff; display: flex; align-items: center; justify-content: center; font: 700 15px var(--font-d); }
 .me b { display: block; font-size: 15px; line-height: 1.2; }
 .me small { display: block; font-size: 13px; color: var(--muted); }

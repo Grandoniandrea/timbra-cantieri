@@ -262,7 +262,7 @@ function renderShell() {
         <div class="top-r">
           <button class="icon-btn" data-act="refresh" aria-label="Aggiorna i dati">${icon('refresh')}</button>
           <button class="icon-btn" data-go="richieste" aria-label="Richieste da approvare" id="bell">${icon('bell')}</button>
-          <div class="me"><div class="avatar" aria-hidden="true">${esc(S.me && !S.me.principale ? initials(S.me.nome) : 'AG')}</div><div class="who"><b>${esc(S.me && !S.me.principale ? S.me.nome : 'Andrea Grandoni')}</b><small>${S.demo ? 'Modalità prova' : esc(S.me ? S.me.ruolo : 'Amministratore')}</small></div></div>
+          <button type="button" class="me" data-act="whoami" aria-label="Utente: cambia utente o esci"><div class="avatar" aria-hidden="true">${esc(S.me && !S.me.principale ? initials(S.me.nome) : 'AG')}</div><div class="who"><b>${esc(S.me && !S.me.principale ? S.me.nome : 'Andrea Grandoni')}</b><small>${S.demo ? 'Modalità prova' : esc(S.me ? S.me.ruolo : 'Amministratore')}</small></div><svg class="chev" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg></button>
         </div>
       </header>
       ${S.demo ? '<div class="demo-bar">Modalità prova: dati finti, non tocca il registro vero. <button class="link" data-act="logout">Esci dalla prova</button></div>' : ''}
@@ -1290,6 +1290,16 @@ function openDlg(html) { $('#dlgBody').innerHTML = html; if (!dlg.open) dlg.show
 dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
 let toastT = null;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 2600); }
+// Menu in alto: chi è entrato, cambia utente, esci
+function whoami() {
+  const n = S.me && !S.me.principale ? S.me.nome : 'Accesso principale';
+  openDlg(`<h2>${esc(n)}</h2><p class="sub">${esc(S.demo ? 'Modalità prova' : (S.me ? S.me.ruolo : 'Amministratore'))}</p>
+    <div class="sheet-nav">
+      <button data-act="switch">${icon('dipendenti')}Cambia utente</button>
+      <button data-go="impostazioni">${icon('impostazioni')}La mia password e impostazioni</button>
+      <button data-act="logout">${icon('esci')}Esci</button>
+    </div><div class="actions"><button class="btn plain" data-act="close">Chiudi</button></div>`);
+}
 function moreMenu() {
   openDlg(`<h2>Menu</h2><div class="sheet-nav">${MENU.filter(v => !TABS.includes(v)).concat('impostazioni').map(v => `<button data-go="${v}">${icon(v)}${VIEWS[v][0]}${navBadge(v)}</button>`).join('')}
     <button data-act="logout">${icon('esci')}Esci</button></div><div class="actions"><button class="btn plain" data-act="close">Chiudi</button></div>`);
@@ -1335,6 +1345,8 @@ document.addEventListener('click', e => {
     case 'demo': S.demo = true; S.pwd = null; return demoApi('leggi').then(enter);
     case 'logout': return logout();
     case 'forgot': return forgot();
+    case 'whoami': return whoami();
+    case 'switch': S.utente = ''; try { localStorage.removeItem('tc_admin_utente'); } catch (err) { /* niente */ } return logout('Entra con un altro account.');
     case 'accNew': if (!S.cache.accounts) needAccountsNow(); return accEdit(null);
     case 'refresh': return refresh();
     case 'more': return moreMenu();
