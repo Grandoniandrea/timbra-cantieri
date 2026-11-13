@@ -189,9 +189,10 @@ const accPubblico_ = a => ({ id: a.id, nome: a.nome, ruolo: a.ruolo, email: a.em
 function chiEntra_(req, giusta) {
   const pwd = String(req.password || ''), nome = nomeKey_(req.utente);
   const acc = accounts_().filter(a => a.attivo !== false);
-  if (nome) { const a = acc.find(x => nomeKey_(x.nome) === nome); return a && a.hash === hashPwd_(pwd, a.salt) ? a : null; }
+  if (nome) { const a = acc.find(x => nomeKey_(x.nome) === nome); if (a && a.hash === hashPwd_(pwd, a.salt)) return a; }
+  // La password principale vale anche se nel campo nome è rimasto scritto un nome
   if (pwd && pwd === giusta) return { id: 'principale', nome: 'Accesso principale', ruolo: 'Amministratore', principale: true };
-  return acc.find(a => a.hash === hashPwd_(pwd, a.salt)) || null;
+  return nome ? null : (acc.find(a => a.hash === hashPwd_(pwd, a.salt)) || null);
 }
 function salvaAccount_(x) {
   const l = accounts_(), nome = String(x && x.nome || '').trim().replace(/\s+/g, ' ').slice(0, 60);
@@ -251,7 +252,7 @@ function reimpostaPassword_(req) {
   const nuova = String(req.nuova || '');
   if (nuova.length < 6) return { ok: false, error: 'corta', msg: 'La password deve avere almeno 6 caratteri.' };
   if (acc) passwordAccount_(acc.id, nuova); else PropertiesService.getScriptProperties().setProperty('PASSWORD_ADMIN', nuova);
-  ['codice_recupero' + k, 'tentativi_recupero' + k, 'tentativi_admin'].forEach(x => cache.remove(x));
+  ['codice_recupero' + k, 'tentativi_recupero' + k, 'tentativi_admin', 'tentativi_' + (acc ? nomeKey_(acc.nome).replace(/[^a-z0-9]+/g, '_').slice(0, 60) : 'principale')].forEach(x => cache.remove(x));
   return { ok: true };
 }
 
@@ -273,14 +274,16 @@ function admin_(req) {
   if (req.azione === 'recupera') return recuperaPassword_(req);
   if (req.azione === 'reimposta') return reimpostaPassword_(req);
   const cache = CacheService.getScriptCache();
-  const tentativi = Number(cache.get('tentativi_admin') || 0);
+  // Tentativi sbagliati contati per nome: gli errori di uno non bloccano gli altri
+  const kT = 'tentativi_' + (nomeKey_(req.utente) || 'principale').replace(/[^a-z0-9]+/g, '_').slice(0, 60);
+  const tentativi = Number(cache.get(kT) || 0);
   if (tentativi >= 5) return { ok: false, error: 'bloccato', msg: 'Troppi tentativi sbagliati. Riprova tra 15 minuti.' };
   const chi = chiEntra_(req, giusta);
   if (!chi) {
-    cache.put('tentativi_admin', String(tentativi + 1), 900);
-    return { ok: false, error: 'password', msg: req.utente ? 'Nome o password sbagliati.' : 'Password sbagliata.' };
+    cache.put(kT, String(tentativi + 1), 900);
+    return { ok: false, error: 'password', msg: (req.utente ? 'Nome o password sbagliati.' : 'Password sbagliata.') + ' Tentativi rimasti: ' + Math.max(0, 4 - tentativi) + '.' };
   }
-  cache.remove('tentativi_admin');
+  cache.remove(kT);
   const eAdmin = chi.ruolo === 'Amministratore';
   if (['azzera', 'account', 'salvaaccount', 'eliminaaccount'].indexOf(req.azione) >= 0 && !eAdmin) return { ok: false, error: 'ruolo', msg: 'Solo un amministratore può farlo.' };
 
