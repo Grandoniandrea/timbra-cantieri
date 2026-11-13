@@ -661,9 +661,10 @@ async function opsEdit() {
     catch (e) { const w = why(e); if (w) toast(w); return; }
   }
   openDlg(`<form id="opsForm" style="display:grid;gap:12px"><h2>Operatori</h2>
-    <p class="sub">Chi è spuntato compare nel programma. Le ore sono quelle settimanali da contratto. Chi ha un cantiere fisso trova subito quello nell'app.</p>
+    <p class="sub">Chi è spuntato compare nel programma. Puoi cambiare il nome (es. solo il cognome): si aggiorna anche nel programma da questa settimana in avanti. Le ore sono quelle settimanali da contratto.</p>
     <div class="rows">${ops.map((p, i) => `<div style="display:grid;gap:8px;padding:10px 0;border-top:1px solid var(--line-soft)">
-      <div class="row"><label style="display:flex;gap:10px;align-items:center;flex:1;font-weight:600"><input type="checkbox" name="on" value="${i}" ${p.attivo !== false ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--accent)">${esc(p.nome)}</label>
+      <div class="row"><input type="checkbox" name="on" value="${i}" ${p.attivo !== false ? 'checked' : ''} aria-label="${esc(p.nome)} attivo" style="width:20px;height:20px;accent-color:var(--accent);flex:none">
+      <input name="nome${i}" value="${esc(p.nome)}" maxlength="60" aria-label="Nome di ${esc(p.nome)}" style="flex:1;min-width:0;height:40px;border-radius:10px;border:1px solid #c9ccc2;padding:0 10px;font-size:16px;font-weight:600">
       <label style="display:flex;gap:6px;align-items:center;font-size:14px"><input name="ore${i}" inputmode="decimal" value="${esc(p.ore || 30)}" aria-label="Ore settimanali di ${esc(p.nome)}" style="width:56px;height:38px;border-radius:10px;border:1px solid #c9ccc2;text-align:center;font-size:16px"> h/sett.</label></div>
       <select name="fisso${i}" aria-label="Cantiere fisso di ${esc(p.nome)}" style="height:40px;border-radius:12px;border:1px solid #c9ccc2;padding:0 10px;background:#fff;font-size:15px"><option value="">Nessun cantiere fisso (va dove serve)</option>
       ${sites.map(c => c.nome).concat(p.fisso && !sites.some(c => c.nome === p.fisso) ? [p.fisso] : []).map(n => `<option value="${esc(n)}" ${n === p.fisso ? 'selected' : ''}>Fisso: ${esc(cap(n))}</option>`).join('')}</select></div>`).join('')}</div>
@@ -672,12 +673,14 @@ async function opsEdit() {
   $('#opsForm').addEventListener('submit', async e => {
     e.preventDefault();
     const f = new FormData(e.target), on = new Set(f.getAll('on').map(Number));
-    const lista = ops.map((p, i) => ({ nome: p.nome, attivo: on.has(i), ore: Number(String(f.get('ore' + i) || '').replace(',', '.')) || 30, fisso: String(f.get('fisso' + i) || '') }));
+    const ren = {};
+    const lista = ops.map((p, i) => { const raw = String(f.get('nome' + i) || '').trim().replace(/\s+/g, ' '); const nn = !raw || raw.toLowerCase() === p.nome.toLowerCase() ? p.nome : cap(raw); if (nn !== p.nome) ren[p.nome.toLowerCase()] = nn; return { nome: nn, attivo: on.has(i), ore: Number(String(f.get('ore' + i) || '').replace(',', '.')) || 30, fisso: String(f.get('fisso' + i) || '') }; });
     String(f.get('nuovo') || '').split(/[\n,;]+/).map(v => cap(v.trim().replace(/\s+/g, ' '))).filter(Boolean).forEach(n => { if (!lista.some(p => sameName(p.nome, n))) lista.push({ nome: n, attivo: true, ore: 30, fisso: '' }); });
     dlg.close(); toast('Salvo gli operatori…');
     try {
       const out = await queued('operatori', { operatori: lista });
       if (S.plan) S.plan.operatori = out.operatori || lista;
+      if (Object.keys(ren).length) await renameInPlan(ren);
       Object.keys(S.cache).filter(k => k.startsWith('p:') || ['interventi', 'scad', 'dpi'].includes(k)).forEach(k => { if (!(S.plan && S.plan.dirty && k === 'p:' + S.plan.week)) delete S.cache[k]; });
       toast('Operatori salvati');
     } catch (err) { const w = why(err); if (w) toast(w); }
@@ -687,6 +690,23 @@ async function opsEdit() {
 // Sull'iPhone la finestra di stampa si apre dopo: la pagina da stampare resta pronta finché non si chiude
 function endPrint() { document.body.classList.remove('printing'); $('#printArea').innerHTML = ''; }
 window.addEventListener('afterprint', endPrint);
+// Nome cambiato: si aggiorna nelle squadre da questa settimana alle prossime 5
+async function renameInPlan(ren) {
+  const sw = o => ren[String(o).trim().toLowerCase()] || o;
+  const w0 = mondayOf(todayIso());
+  let n = 0;
+  for (let i = 0; i < 6; i++) {
+    const w = addDays(w0, i * 7);
+    const dirty = S.plan && S.plan.dirty && S.plan.week === w;
+    const out = dirty ? { squadre: S.plan.squadre } : await queued('programma', { da: w, a: addDays(w, 6) });
+    const sq = (out.squadre || []);
+    if (!sq.some(s => s.operatori.some(o => sw(o) !== o))) continue;
+    const nuove = sq.map(s => Object.assign({}, s, { operatori: s.operatori.map(sw) }));
+    if (dirty) { S.plan.squadre = nuove; } else { const r = await queued('salvaprogramma', { da: w, a: addDays(w, 6), squadre: nuove }); S.cache['p:' + w] = r; if (S.plan && S.plan.week === w) S.plan = null; }
+    n++;
+  }
+  if (n) toast(`Nome aggiornato anche nel programma (${n} ${n === 1 ? 'settimana' : 'settimane'})`);
+}
 function printDoc(html) {
   $('#printArea').innerHTML = html;
   document.body.classList.add('printing');

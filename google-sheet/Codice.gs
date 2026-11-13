@@ -1085,7 +1085,9 @@ function operatori_() {
       fisso: String(r[3] || '').trim().toUpperCase() })) : [];
   const noti = {};
   elenco.forEach(o => { noti[o.nome.toLowerCase()] = true; });
-  nomiDaTimbrature_().forEach(n => { if (!noti[n.toLowerCase()]) elenco.push({ nome: n, attivo: true, ore: 30, fisso: '' }); });
+  // Chi è in elenco con il solo cognome (es. "Grandoni") non ricompare con nome e cognome preso dalle timbrature
+  const stesso = n => { const k = n.toLowerCase(), cogn = k.split(/\s+/).slice(-1)[0]; return noti[k] || noti[cogn] || elenco.some(o => o.nome.toLowerCase().split(/\s+/).slice(-1)[0] === k); };
+  nomiDaTimbrature_().forEach(n => { if (!stesso(n)) elenco.push({ nome: n, attivo: true, ore: 30, fisso: '' }); });
   return elenco.sort((a, b) => a.nome.localeCompare(b.nome));
 }
 
