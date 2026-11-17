@@ -1648,16 +1648,26 @@ function dpiOp(nome) {
     <div class="rows">${capi.map(c => { const x = att[c.nome];
       return x ? `<button type="button" class="row prow-d" data-dedit="${esc(x.id)}" style="border:0;background:transparent;text-align:left;width:100%;cursor:pointer;font:inherit;color:inherit"><div class="txt"><b>${esc(c.nome)}${x.taglia ? ` · ${esc(x.taglia)}` : ''}</b><span>consegnato il ${fmtIso(x.data)}${x.qta > 1 ? ` (×${x.qta})` : ''}${x.scadenza ? ' · scade ' + fmtIso(x.scadenza) : ''}</span></div>${st(x)}<span class="btn plain sm" aria-hidden="true">Modifica</span></button>`
         : `<div class="row prow-d"><div class="txt"><b>${esc(c.nome)}</b><span>mai consegnato</span></div>${chip('grey', '—')}</div>`; }).join('') || '<p class="empty">Nessun capo: aggiungili da «Capi e durata».</p>'}</div>
-    <div class="actions" style="flex-wrap:wrap"><button type="button" class="btn plain" data-act="close">Chiudi</button><button type="button" class="btn ghost" id="dpiSto">Tutte le consegne</button><button type="button" class="btn ghost" id="dpiPdf">Scheda da firmare</button><button type="submit" class="btn ghost">Salva taglie</button><button type="button" class="btn" id="dpiNuova">${icon('plus')}Nuova consegna</button></div></form>`);
+    <p class="sub" id="tgMsg" role="status" style="margin:0;min-height:1.2em"></p>
+    <div class="actions" style="flex-wrap:wrap"><button type="button" class="btn plain" data-act="close">Chiudi</button><button type="button" class="btn ghost" id="dpiSto">Tutte le consegne</button><button type="button" class="btn ghost" id="dpiPdf">Scheda da firmare</button><button type="submit" class="btn ghost" id="tgSave">Salva taglie</button><button type="button" class="btn" id="dpiNuova">${icon('plus')}Nuova consegna</button></div></form>`);
   $('#dpiNuova').addEventListener('click', () => dpiNew(nome));
   $('#dpiPdf').addEventListener('click', () => { dlg.close(); printDoc(schedaDoc(d, nome)); });
   $('#dpiSto').addEventListener('click', () => dpiStorico(nome));
   $('#dpiOpForm').addEventListener('submit', async e => {
     e.preventDefault();
     const f = new FormData(e.target), taglie = { maglia: String(f.get('maglia') || '').trim(), pantalone: String(f.get('pantalone') || '').trim(), scarpe: String(f.get('scarpe') || '').trim(), note: t.note || '' };
-    toast('Salvo le taglie…');
-    try { S.cache.dpi = await queued('dpitaglie', { operatore: nome, taglie }); toast('Taglie salvate'); } catch (err) { const w = why(err); if (w) toast(w); }
-    renderPage(); dpiOp(nome);
+    // Il messaggio resta dentro la finestra (il toast finirebbe sotto)
+    const btn = $('#tgSave'), msg = $('#tgMsg');
+    btn.disabled = true; btn.textContent = 'Salvo…'; msg.textContent = '';
+    try {
+      S.cache.dpi = await queued('dpitaglie', { operatore: nome, taglie });
+      btn.textContent = 'Taglie salvate ✓'; msg.textContent = `Maglia ${taglie.maglia || '—'} · pantalone ${taglie.pantalone || '—'} · scarpe ${taglie.scarpe || '—'}`; msg.style.color = '#3d5306';
+      renderPage();
+    } catch (err) {
+      const w = why(err); btn.disabled = false; btn.textContent = 'Riprova'; msg.textContent = '⚠️ ' + (w || 'Non salvato: controlla la connessione'); msg.style.color = '#a61b1b';
+      return;
+    }
+    setTimeout(() => { const b = $('#tgSave'); if (b) { b.disabled = false; b.textContent = 'Salva taglie'; } }, 2500);
   });
 }
 function dpiStorico(nome) {
