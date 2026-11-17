@@ -622,3 +622,15 @@ dialog .btn:has(> .ico) { display: flex; justify-content: flex-start; text-align
 
 .rit-tag { display: block; color: #c62828; font-weight: 650; font-size: 11px; letter-spacing: 0; }
 @media (prefers-color-scheme: dark) { .rit-tag { color: #f87171; } }
+
+/* Le mie scadenze (visite e corsi) */
+@keyframes ms-blink { 0%, 100% { opacity: 1; } 50% { opacity: .2; } }
+.mie-scad { display: grid; gap: 10px; border-color: #f5c98a; background: #fff8ec; }
+.mie-scad.bad { border-color: #dc2626; background: #fdecec; }
+.mie-scad small { font-weight: 700; letter-spacing: .08em; }
+.ms-row { display: flex; gap: 10px; align-items: flex-start; }
+.ms-row b { display: block; }
+.ms-row span { font-size: 14px; }
+.ms-dot { width: 12px; height: 12px; border-radius: 50%; margin-top: 5px; flex: none; background: #f59e0b; animation: ms-blink 1.8s ease-in-out infinite; }
+.ms-row.over .ms-dot { background: #dc2626; animation-duration: 1s; }
+.ms-row.book .ms-dot { background: #2f6fd6; animation: none; }

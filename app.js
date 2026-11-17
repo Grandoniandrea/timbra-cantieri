@@ -56,7 +56,7 @@ function load() {
 }
 // Registro aziendale GEECO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 69;
+const APP_VERSION = 70;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -245,6 +245,7 @@ function render() {
   const n = db.shifts.filter(s => s.start >= startOfMonth() && !s.demo).length;
   $('#statMonthN').textContent = `${n} turn${n === 1 ? 'o' : 'i'} conclus${n === 1 ? 'o' : 'i'}`;
 
+  renderMieScad();
   renderInterventi();
   renderPlan();
 
@@ -1548,6 +1549,21 @@ function myPlan() {
   const oggi = isoDay(new Date());
   return db.plan.squadre.filter(s => s.data >= oggi && s.operatori.some(isMe));
 }
+// Avviso all'operatore: visita medica o corso scaduti, in scadenza entro 30 giorni o prenotati
+function renderMieScad() {
+  let box = $('#mieScad');
+  if (!box) { box = document.createElement('section'); box.id = 'mieScad'; box.hidden = true; $('#status').after(box); }
+  const oggi = new Date(); oggi.setHours(0, 0, 0, 0);
+  const gg = iso => { const [y, m, d] = iso.split('-').map(Number); return Math.round((new Date(y, m - 1, d) - oggi) / 864e5); };
+  const dmy = iso => iso.split('-').reverse().join('/');
+  const l = (db.mieScad || []).filter(x => x.scadenza && (gg(x.scadenza) <= 30 || (x.prenotato && gg(x.prenotato) >= 0)));
+  if (!l.length || isDemo()) { box.hidden = true; return; }
+  box.hidden = false;
+  box.className = 'card mie-scad' + (l.some(x => gg(x.scadenza) < 0 && !(x.prenotato && gg(x.prenotato) >= 0)) ? ' bad' : '');
+  box.innerHTML = `<small>LE TUE SCADENZE</small>${l.map(x => { const g = gg(x.scadenza), pren = x.prenotato && gg(x.prenotato) >= 0;
+    return `<div class="ms-row ${pren ? 'book' : g < 0 ? 'over' : 'under'}"><span class="ms-dot" aria-hidden="true"></span><div><b>${esc(x.voce)}</b>
+      <span>${pren ? `prenotata per il ${dmy(x.prenotato)}` : g < 0 ? `scaduta il ${dmy(x.scadenza)}: parlane con il responsabile` : g === 0 ? 'scade oggi' : `scade il ${dmy(x.scadenza)}, tra ${g} giorni`}</span></div></div>`; }).join('')}`;
+}
 function renderPlan() {
   const box = $('#plan');
   if (!box) return;
@@ -2335,6 +2351,8 @@ async function syncSites() {
     // Con un impianto fisso nuovo si apre subito il suo committente
     if ('fisso' in out && (out.fisso || '') !== (db.fisso || '')) { db.fisso = out.fisso || ''; if (db.fisso) db.clienteAperto = committenteDi(db.fisso); save(); }
     if (out.config && JSON.stringify(out.config) !== JSON.stringify(db.config)) { db.config = out.config; save(); }
+    // Le mie visite mediche e corsi in scadenza (con lo script aggiornato)
+    if (Array.isArray(out.scadenze) && JSON.stringify(out.scadenze) !== JSON.stringify(db.mieScad || [])) { db.mieScad = out.scadenze; save(); render(); }
     applyReset();
     const names = out.cantieri;
     const byName = new Map(db.sites.map(s => [s.name, s]));

@@ -141,7 +141,7 @@ function doGet(e) {
     return json_({ ok: true, assenze: assenze_().filter(a => a.device && a.device === String(e.parameter.device || '')) });
   }
   if (e && e.parameter && e.parameter.azione === 'cantieri') {
-    return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), committenti: committenti_(), fisso: fissoDi_(e.parameter.nome), config: {
+    return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), committenti: committenti_(), fisso: fissoDi_(e.parameter.nome), scadenze: mieScadenze_(e.parameter.nome), config: {
       oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN, turni: TURNI, sede: sede_(), zonaForeco: zonaForeco_(),
       autorizzaNome: AUTORIZZA_NOME.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_NOME,
       autorizzaTelefono: AUTORIZZA_TELEFONO.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_TELEFONO,
@@ -1536,6 +1536,25 @@ function importaScadenze_(voci, righe) {
   });
   if (out.length) sh.getRange(sh.getLastRow() + 1, 1, out.length, INTEST_SC.length).setValues(out);
   return out.length;
+}
+
+/**
+ * Le scadenze di un operatore per la sua app: solo voce, data e prenotazione, scadute o entro 60 giorni.
+ * Il nome dell'app ("Andrea Grandoni") vale anche per "Grandoni" o "Grandoni Andrea" nel foglio.
+ */
+function mieScadenze_(nome) {
+  const toks = String(nome || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!toks.length) return [];
+  let d; try { d = scadenze_(); } catch (err) { return []; }
+  const mio = op => { const k = String(op).trim().toLowerCase().split(/\s+/).filter(Boolean); return k.length > 0 && k.every(t => toks.indexOf(t) >= 0); };
+  const ultime = {};
+  d.righe.filter(r => mio(r.operatore)).forEach(r => { const k = r.voce.toLowerCase(); if (!ultime[k] || ultime[k].fatto < r.fatto) ultime[k] = r; });
+  const oggi = new Date(); oggi.setHours(0, 0, 0, 0);
+  const limite = new Date(oggi.getTime() + SC_FINESTRA_GIORNI * 864e5);
+  return Object.values(ultime).filter(r => r.scadenza && daIso_(r.scadenza) <= limite).map(r => {
+    const m = /prenotat[oa]\s+(?:per\s+)?(?:il\s+)?(\d{1,2})\/(\d{1,2})\/(\d{4})/i.exec(r.note || '');
+    return { voce: r.voce, scadenza: r.scadenza, prenotato: m ? m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2) : '' };
+  }).sort((a, b) => a.scadenza.localeCompare(b.scadenza));
 }
 
 /** Ultima registrazione per operatore e voce, scaduta o in scadenza entro la finestra. */

@@ -373,7 +373,8 @@ function pDashboard() {
     const scad = vicine.filter(r => daysTo(r.scadenza) < 0), pres = vicine.filter(r => daysTo(r.scadenza) >= 0);
     const riga = r => { const g = daysTo(r.scadenza);
       return `<button class="row" data-go="dipendenti" style="border:0;background:transparent;padding:0;text-align:left;width:100%"><div class="txt"><b>${esc(r.operatore)}</b><span>${esc(r.voce)} · ${fmtIso(r.scadenza)}</span></div>${chip((g < 0 ? 'no' : 'wait') + ' blink' + (g < 0 ? '' : ' slow'), g < 0 ? `scaduto ${-g} g fa` : g === 0 ? 'oggi' : `tra ${g} g`)}</button>`; };
-    memo = `<article class="card span-2 scad-card${scad.length ? ' alarm' : ''}"><div class="card-head"><h2>Visite e corsi</h2><small>prossimi ${FINESTRA_SCAD} giorni</small></div>
+    const nPren = scPrenotati(sc).length;
+    memo = `<article class="card span-2 scad-card${scad.length ? ' alarm' : ''}"><div class="card-head"><h2>Visite e corsi</h2><small>prossimi ${FINESTRA_SCAD} giorni${nPren ? ` · <b class="tx-book">${nPren} prenotat${nPren === 1 ? 'o' : 'i'}</b>` : ''}</small></div>
       ${vicine.length ? `<div class="scad-kpi">
         <button class="sk no${scad.length ? ' blink' : ''}" data-go="dipendenti"><strong>${scad.length}</strong><span>${scad.length === 1 ? 'scaduto' : 'scaduti'}</span></button>
         <button class="sk wait${pres.length ? ' blink slow' : ''}" data-go="dipendenti"><strong>${pres.length}</strong><span>in scadenza</span></button></div>
@@ -680,7 +681,16 @@ function changeWeek(w) {
   if (S.plan && S.plan.dirty) S.plan = null;
   S.week = w; renderPage();
 }
+// ---------- Programma: chi ha visite o corsi scaduti ----------
+// Bloccanti: visita medica e corso sicurezza lavoratori (servono a tutti). Le altre abilitazioni sono un avviso.
+const BLOCCANTE = /visita medica|lavorator/i;
+function scadutiDi(nome) {
+  const sc = S.cache.scad; if (!sc || !Array.isArray(sc.righe)) return [];
+  return scUltime(sc).filter(r => stessa(r.operatore, nome) && daysTo(r.scadenza) !== null && daysTo(r.scadenza) < 0);
+}
+const bloccantiDi = nome => scadutiDi(nome).filter(r => BLOCCANTE.test(r.voce));
 function pProgramma() {
+  needScad();
   const w = S.week || mondayOf(todayIso());
   const P = planReady(w);
   const days = [...Array(7)].map((_, i) => addDays(w, i));
@@ -696,18 +706,25 @@ function pProgramma() {
   const forecoSite = P.cantieri.find(c => isForeco(c.nome));
   const isD = doppiDi(all);
   const hit = s => match(s.cantiere, s.operatori.join(' '), s.turno);
+  const opSpan = d => o => { const b = bloccantiDi(o);
+    return `<span class="${isD(d, o) ? 'doppio' : ''}${b.length ? ' sc-bad' : ''}"${b.length ? ` title="Scaduto: ${esc(b.map(r => r.voce).join(', '))}"` : ''}>${b.length ? '⚠ ' : ''}${esc(o)}</span>`; };
+  // Chi è in squadra questa settimana con visita medica o corso lavoratori scaduti
+  const inSquadra = [...new Set(all.filter(s => !isAss(s.turno)).flatMap(s => s.operatori))];
+  const bloccati = inSquadra.map(o => ({ o, b: bloccantiDi(o) })).filter(x => x.b.length);
+  const avviso = bloccati.length ? `<div class="scad-alert" role="status"><span class="dot blink" aria-hidden="true"></span><p><b>In squadra con scadenze scadute:</b> ${bloccati.map(x => `${esc(x.o)} (${esc(x.b.map(r => r.voce.replace(/ \(.*\)$/, '')).join(', '))})`).join(' · ')}</p>
+    <button class="btn plain sm" data-go="dipendenti" style="margin-left:auto">Vedi</button></div>` : '';
   const dayHtml = d => {
     const ass = P.squadre.filter(s => s.data === d && isAss(s.turno));
     return `<section class="day ${d === today ? 'is-today' : ''}"><h3>${dayOf(d).toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'short' })}</h3>
       ${TURNI.map(t => `<div class="turno"><small>${t.nome} ${t.orario}</small>
         ${P.squadre.filter(s => s.data === d && s.turno === t.nome && !impiantoDi(s.cantiere)).map(s => `<button class="sqb ${hit(s) ? '' : 'dim'}" data-sq="${esc(s.id)}">
-          <i style="background:${esc(siteColor(s.cantiere))}"></i><span><b>${esc(cap(s.cantiere))}</b> ${s.operatori.map(o => `<span class="${isD(d, o) ? 'doppio' : ''}">${esc(o)}</span>`).join(', ')}${s.nota ? `<em>${esc(s.nota)}</em>` : ''}</span></button>`).join('')}
+          <i style="background:${esc(siteColor(s.cantiere))}"></i><span><b>${esc(cap(s.cantiere))}</b> ${s.operatori.map(opSpan(d)).join(', ')}${s.nota ? `<em>${esc(s.nota)}</em>` : ''}</span></button>`).join('')}
         <button class="addsq" data-addsq="${d}|${t.nome}">+ Squadra</button></div>`).join('')}
       ${forecoSite && GIORNI_FORECO.includes(dayOf(d).getDay()) && !P.squadre.some(s => s.data === d && isForeco(s.cantiere)) ? `<button class="addsq" data-addsq="${d}|Mattina" style="border-color:#f5c98a;color:#9a4a05">FORECO: nessuno in squadra · + aggiungi</button>` : ''}
       <div class="turno"><small>Impianti · Ecofor 07–15:30 · Ecoacciai 08–16</small>
         ${all.filter(s => s.data === d && !isAss(s.turno) && impiantoDi(s.cantiere)).map(s => s.auto
-          ? `<div class="sqb fisso ${hit(s) ? '' : 'dim'}"><i style="background:${esc(siteColor(s.cantiere))}"></i><span><b>${esc(impiantoDi(s.cantiere).nome)}</b> <span class="${isD(d, s.operatori[0]) ? 'doppio' : ''}">${esc(s.operatori[0])}</span><em>cantiere fisso</em></span></div>`
-          : `<button class="sqb ${hit(s) ? '' : 'dim'}" data-sq="${esc(s.id)}"><i style="background:${esc(siteColor(s.cantiere))}"></i><span><b>${esc(impiantoDi(s.cantiere).nome)}</b> ${s.operatori.map(o => `<span class="${isD(d, o) ? 'doppio' : ''}">${esc(o)}</span>`).join(', ')}${s.nota ? `<em>${esc(s.nota)}</em>` : ''}</span></button>`).join('')}
+          ? `<div class="sqb fisso ${hit(s) ? '' : 'dim'}"><i style="background:${esc(siteColor(s.cantiere))}"></i><span><b>${esc(impiantoDi(s.cantiere).nome)}</b> ${opSpan(d)(s.operatori[0])}<em>cantiere fisso</em></span></div>`
+          : `<button class="sqb ${hit(s) ? '' : 'dim'}" data-sq="${esc(s.id)}"><i style="background:${esc(siteColor(s.cantiere))}"></i><span><b>${esc(impiantoDi(s.cantiere).nome)}</b> ${s.operatori.map(opSpan(d)).join(', ')}${s.nota ? `<em>${esc(s.nota)}</em>` : ''}</span></button>`).join('')}
         <button class="addsq" data-addsq="${d}|Impianto">+ Squadra impianto</button></div>
       <button class="assb ${ass.length ? 'on' : ''}" data-assday="${d}">${ass.length ? ass.map(a => `<b>${esc(a.turno)}:</b> ${esc(a.operatori.join(', '))}`).join('<br>') : '+ Ferie, malattia, permesso'}</button>
     </section>`;
@@ -723,7 +740,7 @@ function pProgramma() {
     <p class="sub">Geofor 5 h a turno, FORECO 3 h 30 (lun-mer-ven), Ecofor Service ed Ecoacciai 8 h. Ferie, malattia e permesso contano 5 h. Chi ha un impianto fisso (da Operatori) ci compare da solo dal lunedì al venerdì. <span class="doppio">Nome in rosso</span> = doppio turno.</p></article>`;
   const save = `<div class="savebar ${P.dirty ? 'show' : ''}"><span>${P.dirty ? 'Modifiche non salvate' : 'Programma salvato'}</span>
     ${P.dirty ? '<button class="btn plain sm" data-act="undoPlan">Annulla</button>' : ''}<button class="btn sm" data-act="savePlan" ${P.dirty ? '' : 'disabled'}>Salva il programma</button></div>`;
-  return head(actions) + tools + save + `<div class="days">${days.map(dayHtml).join('')}</div>` + `<div class="grid g-2">${spec}</div>`;
+  return head(actions) + tools + avviso + save + `<div class="days">${days.map(dayHtml).join('')}</div>` + `<div class="grid g-2">${spec}</div>`;
 }
 function sqEdit(id, data, turno) {
   const P = S.plan; if (!P) return;
@@ -744,7 +761,8 @@ function sqEdit(id, data, turno) {
     <label class="field">Cantiere<select name="cantiere">${names.map(n => `<option value="${esc(n)}" ${n === def ? 'selected' : ''}>${esc(cap(n))}${isForeco(n) ? ' · 3 h 30, lun-mer-ven' : ''}</option>`).join('')}</select></label>
     ${people.length ? [0, 1, 2, 3].map(i => `<label class="field">Operatore ${i + 1}${i ? ' (facoltativo)' : ''}<select name="op"><option value="">${i ? '—' : 'Scegli…'}</option>
       ${people.map(p => { const x = ore[p.nome.toLowerCase()] || { h: 0 }; const a = inAss(p.nome);
-        return `<option value="${esc(p.nome)}" ${s.operatori[i] && sameName(s.operatori[i], p.nome) ? 'selected' : ''}>${esc(p.nome)} · ${fmtH(x.h)}/${fmtH(oreContratto(p.nome))} h${a ? ' · IN ' + a.toUpperCase() : altrove(p.nome, true) ? ' · già in squadra' : altrove(p.nome, false) ? ' · doppio turno' : ''}</option>`; }).join('')}</select></label>`).join('') : '<p class="empty">Nessun operatore: aggiungili da Operatori.</p>'}
+        const bl = bloccantiDi(p.nome), sca = scadutiDi(p.nome);
+        return `<option value="${esc(p.nome)}" ${s.operatori[i] && sameName(s.operatori[i], p.nome) ? 'selected' : ''}>${bl.length ? '⚠ ' : ''}${esc(p.nome)} · ${fmtH(x.h)}/${fmtH(oreContratto(p.nome))} h${a ? ' · IN ' + a.toUpperCase() : altrove(p.nome, true) ? ' · già in squadra' : altrove(p.nome, false) ? ' · doppio turno' : ''}${bl.length ? ' · SCADUTO: ' + bl.map(r => r.voce.replace(/ \(.*\)$/, '')).join(', ') : sca.length ? ' · scaduto: ' + sca.map(r => r.voce.replace(/ \(.*\)$/, '')).join(', ') : ''}</option>`; }).join('')}</select></label>`).join('') : '<p class="empty">Nessun operatore: aggiungili da Operatori.</p>'}
     <label class="field">Nota (facoltativa)<input name="nota" maxlength="200" value="${esc(s.nota || '')}" placeholder="es. mezzo, indirizzo, corso"></label>
     <div class="actions">${id ? '<button type="button" class="btn plain" data-act="delSq">Elimina</button>' : ''}<button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">OK</button></div></form>`);
   $('#sqForm').addEventListener('submit', e => {
@@ -753,6 +771,12 @@ function sqEdit(id, data, turno) {
     if (!ops.length) return toast('Scegli almeno un operatore');
     const cant = String(f.get('cantiere') || def);
     if (isForeco(cant) && !GIORNI_FORECO.includes(dayOf(s.data).getDay()) && !confirm('FORECO di solito è lunedì, mercoledì e venerdì. Metterlo lo stesso in questo giorno?')) return;
+    // Visita medica o corso lavoratori scaduti: si chiede conferma; le altre abilitazioni scadute sono solo un avviso
+    const nuovi = ops.filter(o => !s.operatori.some(x => sameName(x, o)));
+    const bl = nuovi.map(o => ({ o, b: bloccantiDi(o) })).filter(x => x.b.length);
+    if (bl.length && !confirm('⚠ ATTENZIONE\n\n' + bl.map(x => `${x.o}: ${x.b.map(r => `${r.voce} scaduto il ${fmtIso(r.scadenza)}`).join(', ')}`).join('\n') + '\n\nMetterlo in squadra lo stesso?')) return;
+    const altre = nuovi.map(o => ({ o, b: scadutiDi(o).filter(r => !BLOCCANTE.test(r.voce)) })).filter(x => x.b.length);
+    if (altre.length) setTimeout(() => toast('Attenzione: ' + altre.map(x => `${x.o} ha ${x.b.map(r => r.voce.replace(/ \(.*\)$/, '')).join(', ')} scaduto`).join(' · ')), 300);
     Object.assign(s, { cantiere: cant, operatori: ops, nota: String(f.get('nota') || '').trim() });
     if (!id) P.squadre.push(s);
     P.dirty = true; dlg.close(); renderPage();
@@ -1053,11 +1077,33 @@ function scUltime(sc) {
   sc.righe.forEach(r => { const k = r.operatore.toLowerCase() + '|' + r.voce.toLowerCase(); if (!m[k] || m[k].fatto < r.fatto) m[k] = r; });
   return Object.values(m);
 }
+// Prenotazione: si scrive nelle note "Prenotato il gg/mm/aaaa" (nessuna modifica allo script Google)
+const PREN_RE = /prenotat[oa]\s+(?:per\s+)?(?:il\s+)?(\d{1,2})\/(\d{1,2})\/(\d{4})/i;
+const prenIso = r => { const m = PREN_RE.exec(r && r.note || ''); return m ? `${m[3]}-${pad(m[2])}-${pad(m[1])}` : ''; };
+// Stato di una voce: over (scaduta), under (in scadenza), book (prenotata), ok, na (senza scadenza)
+function scSt(r) {
+  const g = daysTo(r.scadenza); if (g === null) return 'na'; if (g > FINESTRA_SCAD) return 'ok';
+  const p = prenIso(r); if (p && daysTo(p) >= 0) return 'book';
+  return g < 0 ? 'over' : 'under';
+}
+// Bollino per lo stato (scaduto e in scadenza lampeggiano, prenotato no)
+function scChip(r, corto) {
+  const st = scSt(r), g = daysTo(r.scadenza);
+  if (st === 'over') return chip('no blink', corto ? fmtIso(r.scadenza) : `scaduto ${-g} g fa`);
+  if (st === 'under') return chip('wait blink slow', corto ? fmtIso(r.scadenza) : g === 0 ? 'scade oggi' : `tra ${g} g`);
+  if (st === 'book') return chip('book', `prenotato ${fmtIso(prenIso(r)).slice(0, 5)}`);
+  if (st === 'ok') return corto ? esc(fmtIso(r.scadenza)) : chip('ok', 'In regola');
+  return corto ? 'fatto ' + esc(fmtIso(r.fatto)) : chip('grey', 'senza scadenza');
+}
 // Chi compare nelle scadenze: tutti (anche i dipendenti importati dagli Excel aziendali) tranne gli operatori disattivati
 function scSpenti(sc) { return new Set((sc.operatori || []).filter(o => o.attivo === false).map(o => o.nome.toLowerCase())); }
 function scVicine(sc) {
   const spenti = scSpenti(sc);
-  return scUltime(sc).filter(r => !spenti.has(r.operatore.toLowerCase()) && r.scadenza && daysTo(r.scadenza) <= FINESTRA_SCAD).sort((a, b) => a.scadenza.localeCompare(b.scadenza));
+  return scUltime(sc).filter(r => !spenti.has(r.operatore.toLowerCase()) && ['over', 'under'].includes(scSt(r))).sort((a, b) => a.scadenza.localeCompare(b.scadenza));
+}
+function scPrenotati(sc) {
+  const spenti = scSpenti(sc);
+  return scUltime(sc).filter(r => !spenti.has(r.operatore.toLowerCase()) && scSt(r) === 'book').sort((a, b) => prenIso(a).localeCompare(prenIso(b)));
 }
 // Dipendenti nella tabella: gli operatori del programma, oppure tutta l'azienda (anche chi è solo negli Excel importati)
 function scPersone(sc, tutti) {
@@ -1073,12 +1119,12 @@ function scStatoPersone(sc, nomi) {
   const ult = scUltime(sc), out = {};
   nomi.forEach(n => {
     const mie = ult.filter(r => sameName(r.operatore, n));
-    const over = [], under = [];
-    mie.forEach(r => { const g = daysTo(r.scadenza); if (g === null) return; if (g < 0) over.push(r); else if (g <= FINESTRA_SCAD) under.push(r); });
+    const over = [], under = [], book = [];
+    mie.forEach(r => { const st = scSt(r); if (st === 'over') over.push(r); else if (st === 'under') under.push(r); else if (st === 'book') book.push(r); });
     const o = (sc.operatori || []).find(x => sameName(x.nome, n) && x.scadenzaContratto);
     if (o) { const g = daysTo(o.scadenzaContratto); const c = { operatore: n, voce: 'Contratto a tempo determinato', scadenza: o.scadenzaContratto, contratto: true }; if (g < 0) over.push(c); else if (g <= FINESTRA_SCAD) under.push(c); }
     over.sort((a, b) => a.scadenza.localeCompare(b.scadenza)); under.sort((a, b) => a.scadenza.localeCompare(b.scadenza));
-    out[n] = { over, under, tot: mie.length };
+    out[n] = { over, under, book, tot: mie.length };
   });
   return out;
 }
@@ -1086,18 +1132,84 @@ function scStatoPersone(sc, nomi) {
 function scPerson(nome) {
   const sc = S.cache.scad; if (!sc || !sc.righe) return;
   const ult = scUltime(sc).filter(r => sameName(r.operatore, nome));
-  const ord = r => { const g = daysTo(r.scadenza); return g === null ? 3 : g < 0 ? 0 : g <= FINESTRA_SCAD ? 1 : 2; };
+  const ord = r => ({ over: 0, under: 1, book: 2, ok: 3, na: 4 })[scSt(r)];
   ult.sort((a, b) => ord(a) - ord(b) || (a.scadenza || '9').localeCompare(b.scadenza || '9'));
   const mancanti = sc.voci.filter(v => v.attiva && !ult.some(r => sameName(r.voce, v.nome)));
   const st = scStatoPersone(sc, [nome])[nome];
   openDlg(`<h2>${esc(nome)}</h2>
-    <p class="sub">${st.over.length ? `<b class="tx-no">${st.over.length} ${st.over.length === 1 ? 'scaduto' : 'scaduti'}</b> · ` : ''}${st.under.length ? `<b class="tx-wait">${st.under.length} in scadenza</b> · ` : ''}${ult.length} ${ult.length === 1 ? 'voce registrata' : 'voci registrate'}</p>
-    <div class="rows" style="margin-top:6px">${ult.map(r => { const g = daysTo(r.scadenza), k = ord(r);
+    <p class="sub">${st.over.length ? `<b class="tx-no">${st.over.length} ${st.over.length === 1 ? 'scaduto' : 'scaduti'}</b> · ` : ''}${st.under.length ? `<b class="tx-wait">${st.under.length} in scadenza</b> · ` : ''}${st.book.length ? `<b class="tx-book">${st.book.length} prenotat${st.book.length === 1 ? 'o' : 'i'}</b> · ` : ''}${ult.length} ${ult.length === 1 ? 'voce registrata' : 'voci registrate'}</p>
+    <div class="rows" style="margin-top:6px">${ult.map(r => { const k = ord(r);
       return `<div class="row prow-d"><div class="txt"><b>${esc(r.voce)}</b><span>${r.scadenza ? 'scade ' + fmtIso(r.scadenza) : 'senza scadenza'} · fatto ${fmtIso(r.fatto)}${r.note ? ' · ' + esc(r.note) : ''}</span></div>
-        ${k === 0 ? chip('no blink', `scaduto ${-g} g fa`) : k === 1 ? chip('wait blink slow', g === 0 ? 'oggi' : `tra ${g} g`) : k === 2 ? chip('ok', 'In regola') : chip('grey', '—')}
-        <button class="btn ${k <= 1 ? '' : 'plain'} sm" data-screg="${esc(nome)}|${esc(r.voce)}">Rinnova</button><button class="btn plain sm" data-scedit="${esc(r.id)}" aria-label="Modifica ${esc(r.voce)}">Modifica</button></div>`; }).join('') || '<p class="empty">Niente registrato.</p>'}</div>
+        ${scChip(r)}
+        <button class="btn ${k <= 1 ? '' : 'plain'} sm" data-screg="${esc(nome)}|${esc(r.voce)}">Rinnova</button>${k <= 2 ? `<button class="btn plain sm" data-scpren="${esc(r.id)}">${k === 2 ? 'Prenotazione' : 'Prenota'}</button>` : ''}<button class="btn plain sm" data-scedit="${esc(r.id)}" aria-label="Modifica ${esc(r.voce)}">Modifica</button></div>`; }).join('') || '<p class="empty">Niente registrato.</p>'}</div>
     ${mancanti.length ? `<details style="margin-top:8px"><summary>Aggiungi visita o corso (${mancanti.length} non registrati)</summary><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${mancanti.map(v => `<button class="btn plain sm" data-screg="${esc(nome)}|${esc(v.nome)}">+ ${esc(v.nome)}</button>`).join('')}</div></details>` : ''}
     <div class="actions"><button type="button" class="btn" data-act="close">Chiudi</button></div>`);
+}
+// Segna la visita o il corso come prenotato: smette di lampeggiare fino al giorno della prenotazione
+function scPren(id) {
+  const sc = S.cache.scad; const r = sc && sc.righe.find(x => x.id === id); if (!r) return;
+  const p = prenIso(r);
+  openDlg(`<form id="prenForm" style="display:grid;gap:12px"><h2>Prenotazione</h2><p class="sub">${esc(r.operatore)} · ${esc(r.voce)} · scade ${fmtIso(r.scadenza)}</p>
+    <label class="field">Prenotato per il giorno<input type="date" name="d" required value="${esc(p || addDays(todayIso(), 7))}" min="${todayIso()}"></label>
+    <p class="sub">Fino a quel giorno la voce diventa blu e non lampeggia più. Dopo la visita o il corso tocca <b>Rinnova</b> per mettere la nuova scadenza.</p>
+    <div class="actions">${p ? '<button type="button" class="btn plain" id="prenDel">Togli prenotazione</button>' : ''}<button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit">Salva</button></div></form>`);
+  const salva = async iso => {
+    const resto = String(r.note || '').replace(PREN_RE, '').replace(/^[\s·]+|[\s·]+$/g, '').replace(/\s*·\s*·\s*/g, ' · ');
+    const note = (iso ? `Prenotato il ${fmtIso(iso)}` + (resto ? ' · ' + resto : '') : resto).slice(0, 200);
+    dlg.close(); toast('Salvo…');
+    try { S.cache.scad = await queued('scadreg', { reg: { id: r.id, operatore: r.operatore, voce: r.voce, fatto: r.fatto, scadenza: r.scadenza, note } }); toast(iso ? 'Prenotazione salvata' : 'Prenotazione tolta'); }
+    catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage(); scPerson(r.operatore);
+  };
+  $('#prenForm').addEventListener('submit', e => { e.preventDefault(); salva(String(new FormData(e.target).get('d') || '')); });
+  const del = $('#prenDel'); if (del) del.addEventListener('click', () => salva(''));
+}
+// Corsi da organizzare insieme: chi deve rinnovare lo stesso corso entro 90 giorni (o è già scaduto)
+const SOLO_SINGOLI = /visita medica|prelievo|esami|alcol|patente|cqc|adr|tachigraf/i;
+function scGruppi(sc) {
+  const spenti = scSpenti(sc), g = {};
+  scUltime(sc).forEach(r => {
+    if (spenti.has(r.operatore.toLowerCase()) || SOLO_SINGOLI.test(r.voce)) return;
+    const d = daysTo(r.scadenza); if (d === null || d > 90 || scSt(r) === 'book') return;
+    (g[r.voce] = g[r.voce] || []).push(r);
+  });
+  return Object.entries(g).filter(([, l]) => l.length >= 2).map(([voce, l]) => ({ voce, l: l.sort((a, b) => a.scadenza.localeCompare(b.scadenza)) }))
+    .sort((a, b) => b.l.length - a.l.length || a.l[0].scadenza.localeCompare(b.l[0].scadenza));
+}
+function gruppiHtml(sc) {
+  const gr = scGruppi(sc);
+  return `<article class="card"><div class="card-head"><h2>Corsi da organizzare insieme</h2><small>stesso corso da rinnovare entro 90 giorni</small></div>
+    ${gr.length ? `<div class="rows">${gr.map(x => { const sc0 = x.l.filter(r => daysTo(r.scadenza) < 0).length;
+      return `<div class="grp"><div class="grp-h"><b>${esc(x.voce)}</b>${chip(sc0 ? 'no' : 'wait', `${x.l.length} persone`)}</div>
+        <p class="sub" style="margin:2px 0 0">${x.l.map(r => `<button class="link" data-scperson="${esc(r.operatore)}" style="color:${daysTo(r.scadenza) < 0 ? '#a61b1b' : 'var(--ink)'};text-decoration:none">${esc(r.operatore)}</button> <span>${daysTo(r.scadenza) < 0 ? 'scaduto' : fmtIso(r.scadenza).slice(0, 5)}</span>`).join(' · ')}</p></div>`; }).join('')}</div>`
+      : '<p class="empty">Nessun corso con più persone da rinnovare nei prossimi 90 giorni.</p>'}</article>`;
+}
+// Stampa (o PDF) dello specchietto: scaduti, in scadenza, prenotati e corsi da organizzare
+function printSpecchietto() {
+  const sc = S.cache.scad; if (!sc || !sc.righe) return;
+  const spenti = scSpenti(sc);
+  const righe = scUltime(sc).filter(r => !spenti.has(r.operatore.toLowerCase()) && ['over', 'under', 'book'].includes(scSt(r)))
+    .sort((a, b) => ({ over: 0, under: 1, book: 2 })[scSt(a)] - ({ over: 0, under: 1, book: 2 })[scSt(b)] || a.scadenza.localeCompare(b.scadenza));
+  const lab = r => { const st = scSt(r), g = daysTo(r.scadenza); return st === 'over' ? `<b style="color:#b42318">SCADUTO da ${-g} g</b>` : st === 'under' ? `<b style="color:#9a4a05">scade tra ${g} g</b>` : `prenotato il ${fmtIso(prenIso(r))}`; };
+  const gr = scGruppi(sc);
+  printDoc(`<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GEECO"><div><h1>Visite mediche e corsi · specchietto</h1><p>Situazione al ${fmtIso(todayIso())} · scaduti, in scadenza nei prossimi ${FINESTRA_SCAD} giorni e prenotati</p></div></div>
+    <table><thead><tr><th>Dipendente</th><th>Visita o corso</th><th>Scadenza</th><th>Stato</th></tr></thead><tbody>
+    ${righe.map(r => `<tr><td><b>${esc(r.operatore)}</b></td><td>${esc(r.voce)}</td><td>${fmtIso(r.scadenza)}</td><td>${lab(r)}</td></tr>`).join('') || '<tr><td colspan="4">Niente scaduto o in scadenza.</td></tr>'}
+    </tbody></table>
+    ${gr.length ? `<h2 style="font-size:13pt;margin:18px 0 6px">Corsi da organizzare insieme (entro 90 giorni)</h2><table><thead><tr><th>Corso</th><th>Persone</th><th>Chi</th></tr></thead><tbody>
+      ${gr.map(x => `<tr><td><b>${esc(x.voce)}</b></td><td>${x.l.length}</td><td>${x.l.map(r => `${esc(r.operatore)} (${daysTo(r.scadenza) < 0 ? 'scaduto' : fmtIso(r.scadenza)})`).join(', ')}</td></tr>`).join('')}</tbody></table>` : ''}
+    <p style="margin-top:14px">Solo date: esiti e idoneità restano al medico competente.</p></div>`);
+}
+// Patenti e CQC: voci pronte da aggiungere con un tocco
+const PATENTI = [['Patente B', 120], ['Patente C', 60], ['CQC merci', 60], ['ADR (rifiuti pericolosi)', 60], ['Carta tachigrafica', 60]];
+async function addPatenti() {
+  const sc = S.cache.scad; if (!sc || !Array.isArray(sc.voci)) return;
+  const manca = PATENTI.filter(([n]) => !sc.voci.some(v => sameName(v.nome, n) || (/cqc/i.test(n) && /cqc/i.test(v.nome)) || (/adr/i.test(n) && /\badr\b/i.test(v.nome))));
+  const voci = sc.voci.map(v => /patent|cqc|\badr\b|tachigraf/i.test(v.nome) ? Object.assign({}, v, { attiva: true }) : v)
+    .concat(manca.map(([nome, mesi]) => ({ nome, cat: 'Patenti e CQC', mesi, attiva: true })));
+  toast('Salvo…');
+  try { S.cache.scad = await queued('scadvoci', { voci }); toast('Patenti e CQC pronte: mettile dalla scheda di ogni autista'); } catch (err) { const w = why(err); if (w) toast(w); }
+  renderPage();
 }
 function pDipendenti() {
   const sc = needScad();
@@ -1111,8 +1223,9 @@ function pDipendenti() {
   // Specchietto: per ogni dipendente le voci scadute e in scadenza (più il contratto a termine)
   const stato = scStatoPersone(sc, base);
   const nO = base.filter(n => stato[n].over.length).length, nU = base.filter(n => !stato[n].over.length && stato[n].under.length).length;
+  const nB = base.filter(n => stato[n].book.length).length;
   const F = S.dipF || (nO || nU ? 'rischio' : 'tutti');
-  const passa = n => F === 'tutti' ? true : F === 'scaduti' ? stato[n].over.length > 0 : F === 'scadenza' ? !stato[n].over.length && stato[n].under.length > 0 : stato[n].over.length + stato[n].under.length > 0;
+  const passa = n => F === 'tutti' ? true : F === 'scaduti' ? stato[n].over.length > 0 : F === 'scadenza' ? !stato[n].over.length && stato[n].under.length > 0 : F === 'prenotati' ? stato[n].book.length > 0 : stato[n].over.length + stato[n].under.length > 0;
   const ops = base.filter(passa);
   // Con tutta l'azienda si mostrano solo le colonne che hanno almeno una data
   const conDati = new Set(ult.filter(r => ops.some(o => sameName(o, r.operatore))).map(r => r.voce.toLowerCase()));
@@ -1124,25 +1237,28 @@ function pDipendenti() {
   const cell = (op, voce) => {
     const r = ult.find(x => sameName(x.operatore, op) && sameName(x.voce, voce));
     if (!r) return `<button data-screg="${esc(op)}|${esc(voce)}" aria-label="Registra ${esc(voce)} per ${esc(op)}" style="color:#9a9a96">+ registra</button>`;
-    const g = daysTo(r.scadenza);
-    const cls = g === null ? '' : g < 0 ? 'no' : g <= FINESTRA_SCAD ? 'wait' : '';
-    return `<button data-scedit="${esc(r.id)}" aria-label="Modifica ${esc(voce)} di ${esc(op)}${cls === 'no' ? ' (scaduto)' : cls === 'wait' ? ' (in scadenza)' : ''}">${cls ? chip(cls + ' blink' + (cls === 'wait' ? ' slow' : ''), fmtIso(r.scadenza)) : r.scadenza ? fmtIso(r.scadenza) : 'fatto ' + fmtIso(r.fatto)}</button>`;
+    const st = scSt(r);
+    return `<button data-scperson="${esc(op)}" aria-label="${esc(voce)} di ${esc(op)}${st === 'over' ? ' (scaduto)' : st === 'under' ? ' (in scadenza)' : st === 'book' ? ' (prenotato)' : ''}">${scChip(r, true)}</button>`;
   };
   const ctr = contrattiHtml(sc);
-  return head(`<button class="btn" data-act="scNew">${icon('plus')}Registra visita o corso</button><button class="btn ghost" data-act="scImport">${icon('download')}Importa da Excel</button><button class="btn ghost" data-act="scVoci">Visite, corsi e durata</button><button class="btn plain" data-act="ops">${icon('dipendenti')}Operatori</button>`) +
+  return head(`<button class="btn" data-act="scNew">${icon('plus')}Registra visita o corso</button><button class="btn ghost" data-act="scImport">${icon('download')}Importa da Excel</button><button class="btn ghost" data-act="printSpec">Stampa specchietto</button><button class="btn ghost" data-act="scVoci">Visite, corsi e durata</button><button class="btn plain" data-act="ops">${icon('dipendenti')}Operatori</button>`) +
     (() => { const o = vic.filter(r => daysTo(r.scadenza) < 0).length, u = vic.length - o;
       return vic.length ? `<div class="scad-alert${o ? '' : ' only-wait'}" role="status"><span class="dot blink${o ? '' : ' slow'}" aria-hidden="true"></span>
         <p>${o ? `<b>${o} ${o === 1 ? 'scaduto' : 'scaduti'}</b>` : ''}${o && u ? ' · ' : ''}${u ? `<b>${u} in scadenza</b> nei prossimi ${FINESTRA_SCAD} giorni` : ''}</p></div>` : ''; })() +
     `<article class="card"><div class="card-head"><h2>Specchietto dipendenti</h2><small>tocca un nome per intervenire</small></div>
     <div class="seg filt" role="group" aria-label="Filtro">
-      ${[['rischio', `Da sistemare (${nO + nU})`, ''], ['scaduti', `Scaduti (${nO})`, nO ? 'no' : ''], ['scadenza', `In scadenza (${nU})`, nU ? 'wait' : ''], ['tutti', `Tutti (${base.length})`, '']]
+      ${[['rischio', `Da sistemare (${nO + nU})`, ''], ['scaduti', `Scaduti (${nO})`, nO ? 'no' : ''], ['scadenza', `In scadenza (${nU})`, nU ? 'wait' : ''], ['prenotati', `Prenotati (${nB})`, ''], ['tutti', `Tutti (${base.length})`, '']]
         .map(([k, t, c]) => `<button class="btn sm ${F === k ? '' : 'plain'} ${F !== k && c ? 'f-' + c : ''}" data-dipf="${k}" aria-pressed="${F === k}">${t}</button>`).join('')}</div>
     <div class="rows">${ops.map(n => { const x = stato[n], o = x.over.length, u = x.under.length;
-      const voci2 = x.over.concat(x.under).slice(0, 4).map(r => `${esc(r.voce.length > 28 ? r.voce.slice(0, 26) + '…' : r.voce)} <b class="${daysTo(r.scadenza) < 0 ? 'tx-no' : 'tx-wait'}">${daysTo(r.scadenza) < 0 ? 'scaduto' : 'tra ' + daysTo(r.scadenza) + ' g'}</b>`).join(' · ');
+      const voci2 = x.over.concat(x.under, x.book).slice(0, 4).map(r => { const st = scSt(r);
+        return `${esc(r.voce.length > 28 ? r.voce.slice(0, 26) + '…' : r.voce)} <b class="${st === 'over' ? 'tx-no' : st === 'book' ? 'tx-book' : 'tx-wait'}">${st === 'over' ? 'scaduto' : st === 'book' ? 'prenotato ' + fmtIso(prenIso(r)).slice(0, 5) : 'tra ' + daysTo(r.scadenza) + ' g'}</b>`; }).join(' · ');
       return `<button class="row prow" data-scperson="${esc(n)}"><div class="ini c${o ? 3 : u ? 1 : 0}" aria-hidden="true">${esc(initials(n))}</div>
-        <div class="txt"><b>${esc(n)}</b><span>${voci2 || `${x.tot} ${x.tot === 1 ? 'voce registrata' : 'voci registrate'} · in regola`}${o + u > 4 ? ` · e altre ${o + u - 4}` : ''}</span></div>
-        ${o ? chip('no blink', `${o} ${o === 1 ? 'scaduto' : 'scaduti'}`) : ''}${u ? chip('wait blink slow', `${u} in scadenza`) : ''}${!o && !u ? chip('ok', 'In regola') : ''}
+        <div class="txt"><b>${esc(n)}</b><span>${voci2 || `${x.tot} ${x.tot === 1 ? 'voce registrata' : 'voci registrate'} · in regola`}${o + u + x.book.length > 4 ? ` · e altre ${o + u + x.book.length - 4}` : ''}</span></div>
+        ${o ? chip('no blink', `${o} ${o === 1 ? 'scaduto' : 'scaduti'}`) : ''}${u ? chip('wait blink slow', `${u} in scadenza`) : ''}${x.book.length ? chip('book', `${x.book.length} prenotat${x.book.length === 1 ? 'o' : 'i'}`) : ''}${!o && !u && !x.book.length ? chip('ok', 'In regola') : ''}
         <span class="btn plain sm" aria-hidden="true">Intervieni</span></button>`; }).join('') || `<p class="empty">${F === 'tutti' ? 'Nessun dipendente.' : 'Nessuno in questo elenco. ✓'}</p>`}</div></article>
+    ${gruppiHtml(sc)}
+    ${(() => { const att = sc.voci.filter(v => v.attiva && /patent|cqc|\badr\b|tachigraf/i.test(v.nome)).length;
+      return att >= PATENTI.length ? '' : `<article class="card"><div class="card-head"><h2>Patenti e CQC degli autisti</h2></div><p class="sub">Aggiunge le voci Patente B e C, CQC merci, ADR e carta tachigrafica: poi metti le scadenze dalla scheda di ogni autista e lampeggiano come le altre.</p><button class="btn ghost" data-act="addPatenti">Aggiungi patenti e CQC</button></article>`; })()}
     ${ctr}
     <div class="card-head" style="margin-top:6px;flex-wrap:wrap;gap:10px"><h2 style="font:600 18px var(--font-b)">Visite mediche e corsi</h2>
       ${extra > 0 ? `<div class="seg" role="group" aria-label="Chi mostrare"><button class="btn sm ${all ? 'plain' : ''}" data-dipall="0" aria-pressed="${!all}">Operatori del programma (${mie.length})</button><button class="btn sm ${all ? '' : 'plain'}" data-dipall="1" aria-pressed="${all}">Tutta l'azienda (${tutti.length})</button></div>` : ''}</div>
@@ -1702,7 +1818,7 @@ function moreMenu() {
 // ---------- Eventi ----------
 document.addEventListener('click', e => {
   if (document.body.classList.contains('printing')) endPrint();
-  const el = e.target.closest('[data-ctredit],[data-accedit],[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy],[data-dipall],[data-dipf],[data-scperson]');
+  const el = e.target.closest('[data-ctredit],[data-accedit],[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy],[data-dipall],[data-dipf],[data-scperson],[data-scpren]');
   if (!el) return;
   const d = el.dataset;
   if (d.go) return go(d.go);
@@ -1738,6 +1854,7 @@ document.addEventListener('click', e => {
   if (d.dipall) { S.dipAll = d.dipall === '1'; return renderPage(); }
   if (d.dipf) { S.dipF = d.dipf; return renderPage(); }
   if (d.scperson) return scPerson(d.scperson);
+  if (d.scpren) return scPren(d.scpren);
   if (d.copy) return navigator.clipboard.writeText(d.copy).then(() => toast('Link copiato'), () => toast('Copia non riuscita: tieni premuto sul link'));
   switch (d.act) {
     case 'demo': S.demo = true; S.pwd = null; return demoApi('leggi').then(enter);
@@ -1763,6 +1880,8 @@ document.addEventListener('click', e => {
     case 'scNew': return scReg();
     case 'scVoci': return scVociEdit();
     case 'scImport': return scImport();
+    case 'printSpec': return printSpecchietto();
+    case 'addPatenti': return addPatenti();
     case 'savePlan': return savePlan(el);
     case 'undoPlan': if (confirm('Annullare le modifiche non salvate?')) { S.plan = null; renderPage(); } return;
     case 'copyPrev': return copyPrev();

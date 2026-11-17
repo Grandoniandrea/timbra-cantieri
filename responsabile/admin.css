@@ -357,3 +357,11 @@ td.cellbtn button:hover { background: var(--lime-soft); }
 .row.prow-d { flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid #ecece7; }
 .row.prow-d .txt { flex: 1 1 100%; }
 @media (min-width: 700px) { .row.prow-d .txt { flex: 1 1 200px; } }
+.chip.book { background: #e8f0fe; color: #1a4fa0; border-color: #b6ccf5; }
+.tx-book { color: #1a4fa0; }
+.sc-bad { color: #b42318; font-weight: 700; text-decoration: underline wavy #dc2626; text-underline-offset: 3px; }
+.scad-alert .btn { flex: none; }
+.grp { padding: 4px 0 10px; border-bottom: 1px solid #ecece7; }
+.grp:last-child { border-bottom: 0; }
+.grp-h { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.grp .sub span { color: var(--muted); font-size: 12px; }

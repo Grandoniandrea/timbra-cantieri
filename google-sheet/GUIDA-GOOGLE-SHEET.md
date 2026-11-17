@@ -133,3 +133,8 @@ o idoneità), i doppioni si saltano e le celle grigie ("scaduto ma da non rinnov
 Con il nuovo `Codice.gs` (azione `scadimporta`) si salva tutto in pochi secondi: installa il file
 completo e pubblica una nuova versione del deployment. Con lo script vecchio funziona lo stesso,
 ma salva una data alla volta e ci mette diversi minuti.
+
+## Aggiornamento: avviso all'operatore sulle sue scadenze
+Con il nuovo `Codice.gs` l'app dell'operatore riceve le sue visite e i suoi corsi scaduti o in scadenza
+(solo voce, data e prenotazione) e li mostra in cima alla pagina. Le prenotazioni si segnano dall'area
+responsabile (Dipendenti → nome → Prenota) e si salvano nelle note ("Prenotato il gg/mm/aaaa").
