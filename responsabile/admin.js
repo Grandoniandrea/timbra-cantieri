@@ -229,6 +229,8 @@ function logout(msg) { DEMO_DB = null; S.plan = null; S.me = null; S.pwd = null;
 // ---------- Struttura ----------
 function navBadge(v) {
   if (v === 'richieste') { const n = pendingCount(); return n ? `<span class="badge">${n}</span>` : ''; }
+  if (v === 'dipendenti') { const sc = S.cache.scad; if (!sc || !sc.righe) return ''; const v2 = scVicine(sc), o = v2.filter(r => daysTo(r.scadenza) < 0).length, u = v2.length - o;
+    return o ? `<span class="badge red blink" title="${o} scaduti">${o}</span>` : u ? `<span class="badge amber" title="${u} in scadenza">${u}</span>` : ''; }
   if (v === 'interventi') { const x = S.cache.interventi; const n = x && x.interventi ? x.interventi.filter(i => i.stato !== 'Fatto').length : 0; return n ? `<span class="badge">${n}</span>` : ''; }
   return '';
 }
@@ -363,13 +365,22 @@ function pDashboard() {
   const weekCard = `<article class="card span-2"><div class="card-head"><h2>Ore timbrate questa settimana</h2><small>${Array.isArray(tm) ? `${fmtH(ore.reduce((a, b) => a + b, 0))} h · turni chiusi` : 'carico…'}</small></div>
     <div class="bars" role="img" aria-label="Ore timbrate per giorno: ${days.map((d, i) => `${fmtIsoShort(d)} ${fmtH(ore[i])}`).join(', ')}">${bars}</div></article>`;
 
-  // Promemoria scadenze
+  // Visite mediche e corsi: scaduti e in scadenza, sempre sott'occhio
   const vicine = sc && sc.righe ? scVicine(sc) : null;
-  const memo = `<article class="card"><h2>Promemoria</h2>
-    ${vicine === null ? (sc && sc.error ? errBox(sc.error) : loadingBox()) : vicine.length ? `
-      <p style="font:700 26px/1.1 var(--font-d);color:var(--accent)">${vicine.length} ${vicine.length === 1 ? 'scadenza' : 'scadenze'} di visite e corsi</p>
-      <p class="sub">${esc(vicine[0].operatore)} · ${esc(vicine[0].voce)} · ${scTxt(vicine[0])}</p>` : `<p style="font:700 24px/1.1 var(--font-d);color:var(--accent)">Visite e corsi in regola</p><p class="sub">Niente in scadenza nei prossimi ${FINESTRA_SCAD} giorni.</p>`}
-    <button class="btn block" data-go="dipendenti" style="margin-top:auto">${icon('programma')}Vedi le scadenze</button></article>`;
+  let memo;
+  if (vicine === null) memo = `<article class="card span-2"><h2>Visite e corsi</h2>${sc && sc.error ? errBox(sc.error) : loadingBox()}</article>`;
+  else {
+    const scad = vicine.filter(r => daysTo(r.scadenza) < 0), pres = vicine.filter(r => daysTo(r.scadenza) >= 0);
+    const riga = r => { const g = daysTo(r.scadenza);
+      return `<button class="row" data-go="dipendenti" style="border:0;background:transparent;padding:0;text-align:left;width:100%"><div class="txt"><b>${esc(r.operatore)}</b><span>${esc(r.voce)} · ${fmtIso(r.scadenza)}</span></div>${chip((g < 0 ? 'no' : 'wait') + ' blink' + (g < 0 ? '' : ' slow'), g < 0 ? `scaduto ${-g} g fa` : g === 0 ? 'oggi' : `tra ${g} g`)}</button>`; };
+    memo = `<article class="card span-2 scad-card${scad.length ? ' alarm' : ''}"><div class="card-head"><h2>Visite e corsi</h2><small>prossimi ${FINESTRA_SCAD} giorni</small></div>
+      ${vicine.length ? `<div class="scad-kpi">
+        <button class="sk no${scad.length ? ' blink' : ''}" data-go="dipendenti"><strong>${scad.length}</strong><span>${scad.length === 1 ? 'scaduto' : 'scaduti'}</span></button>
+        <button class="sk wait${pres.length ? ' blink slow' : ''}" data-go="dipendenti"><strong>${pres.length}</strong><span>in scadenza</span></button></div>
+        <div class="rows scad-rows">${scad.slice(0, 4).concat(pres.slice(0, scad.length ? 4 : 8)).slice(0, 8).map(riga).join('')}</div>`
+        : `<p style="font:700 24px/1.1 var(--font-d);color:var(--accent)">Tutto in regola</p><p class="sub">Niente scaduto e niente in scadenza nei prossimi ${FINESTRA_SCAD} giorni.</p>`}
+      <button class="btn block" data-go="dipendenti" style="margin-top:auto">${icon('programma')}Vedi tutte le scadenze</button></article>`;
+  }
 
   // Cantieri di oggi dal programma
   const sq = pl && pl.squadre ? pl.squadre.concat(autoFissi(pl.squadre, pl.operatori, mon)).filter(s => s.data === today && !ASSENZE.includes(s.turno)) : null;
@@ -409,8 +420,9 @@ function pDashboard() {
   return head(`<button class="btn" data-act="newInt">${icon('plus')}Nuovo intervento</button><button class="btn ghost" data-go="statistiche">Report del mese</button>`) +
     kpis +
     `<div class="grid g-2">${extra.appello}${extra.sistemare}</div>` +
-    `<div class="grid g-3">${weekCard}${memo}${oggi}</div>` +
-    `<div class="grid g-3">${team}${intCard}${clock}</div>` +
+    `<div class="grid g-3">${memo}${oggi}</div>` +
+    `<div class="grid g-3">${weekCard}${intCard}</div>` +
+    `<div class="grid g-3">${team}${clock}</div>` +
     `<div class="grid g-3">${extra.oreMese}${extra.prossima}${extra.scadenze}</div>` +
     `<div class="grid g-2">${extra.fermi}</div>` +
     `<p class="foot">Dati dal registro Google di Timbra Cantieri · aggiornati all'apertura · ${S.demo ? 'modalità prova' : 'tocca ↻ per aggiornare'}</p>`;
@@ -1078,12 +1090,15 @@ function pDipendenti() {
     if (!r) return `<button data-screg="${esc(op)}|${esc(voce)}" aria-label="Registra ${esc(voce)} per ${esc(op)}" style="color:#9a9a96">+ registra</button>`;
     const g = daysTo(r.scadenza);
     const cls = g === null ? '' : g < 0 ? 'no' : g <= FINESTRA_SCAD ? 'wait' : '';
-    return `<button data-scedit="${esc(r.id)}" aria-label="Modifica ${esc(voce)} di ${esc(op)}">${cls ? chip(cls, fmtIso(r.scadenza)) : r.scadenza ? fmtIso(r.scadenza) : 'fatto ' + fmtIso(r.fatto)}</button>`;
+    return `<button data-scedit="${esc(r.id)}" aria-label="Modifica ${esc(voce)} di ${esc(op)}${cls === 'no' ? ' (scaduto)' : cls === 'wait' ? ' (in scadenza)' : ''}">${cls ? chip(cls + ' blink' + (cls === 'wait' ? ' slow' : ''), fmtIso(r.scadenza)) : r.scadenza ? fmtIso(r.scadenza) : 'fatto ' + fmtIso(r.fatto)}</button>`;
   };
   const ctr = contrattiHtml(sc);
   return head(`<button class="btn" data-act="scNew">${icon('plus')}Registra visita o corso</button><button class="btn ghost" data-act="scImport">${icon('download')}Importa da Excel</button><button class="btn ghost" data-act="scVoci">Visite, corsi e durata</button><button class="btn plain" data-act="ops">${icon('dipendenti')}Operatori</button>`) +
+    (() => { const o = vic.filter(r => daysTo(r.scadenza) < 0).length, u = vic.length - o;
+      return vic.length ? `<div class="scad-alert${o ? '' : ' only-wait'}" role="status"><span class="dot blink${o ? '' : ' slow'}" aria-hidden="true"></span>
+        <p>${o ? `<b>${o} ${o === 1 ? 'scaduto' : 'scaduti'}</b>` : ''}${o && u ? ' · ' : ''}${u ? `<b>${u} in scadenza</b> nei prossimi ${FINESTRA_SCAD} giorni` : ''}</p></div>` : ''; })() +
     `<article class="card"><div class="card-head"><h2>In scadenza</h2><small>scaduti e nei prossimi ${FINESTRA_SCAD} giorni</small></div>
-    <div class="rows">${vic.map(r => `<div class="row"><div class="ini c${daysTo(r.scadenza) < 0 ? 3 : 0}" aria-hidden="true">${esc(initials(r.operatore))}</div><div class="txt"><b>${esc(r.operatore)}</b><span>${esc(r.voce)} · ${fmtIso(r.scadenza)}</span></div>${chip(daysTo(r.scadenza) < 0 ? 'no' : 'wait', scTxt(r))}${r.contratto ? `<button class="btn plain sm" data-ctredit="${esc(r.operatore)}">Aggiorna</button>` : `<button class="btn plain sm" data-screg="${esc(r.operatore)}|${esc(r.voce)}">Rinnova</button>`}</div>`).join('') || '<p class="empty">Niente in scadenza. ✓</p>'}</div></article>
+    <div class="rows">${vic.map(r => `<div class="row"><div class="ini c${daysTo(r.scadenza) < 0 ? 3 : 0}" aria-hidden="true">${esc(initials(r.operatore))}</div><div class="txt"><b>${esc(r.operatore)}</b><span>${esc(r.voce)} · ${fmtIso(r.scadenza)}</span></div>${chip(daysTo(r.scadenza) < 0 ? 'no blink' : 'wait blink slow', scTxt(r))}${r.contratto ? `<button class="btn plain sm" data-ctredit="${esc(r.operatore)}">Aggiorna</button>` : `<button class="btn plain sm" data-screg="${esc(r.operatore)}|${esc(r.voce)}">Rinnova</button>`}</div>`).join('') || '<p class="empty">Niente in scadenza. ✓</p>'}</div></article>
     ${ctr}
     <div class="card-head" style="margin-top:6px;flex-wrap:wrap;gap:10px"><h2 style="font:600 18px var(--font-b)">Visite mediche e corsi</h2>
       ${extra > 0 ? `<div class="seg" role="group" aria-label="Chi mostrare"><button class="btn sm ${all ? 'plain' : ''}" data-dipall="0" aria-pressed="${!all}">Operatori del programma (${mie.length})</button><button class="btn sm ${all ? '' : 'plain'}" data-dipall="1" aria-pressed="${all}">Tutta l'azienda (${tutti.length})</button></div>` : ''}</div>
