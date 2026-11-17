@@ -56,7 +56,7 @@ function load() {
 }
 // Registro aziendale GEECO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 72;
+const APP_VERSION = 73;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -1538,7 +1538,8 @@ async function syncPlan() {
   if (!db.endpoint || navigator.onLine === false) return;
   try {
     if (!db.user) return;
-    const res = await withTimeout(fetch(ep(`azione=programma&${chiSono()}`)), 20000);
+    const lun = mondayOf(new Date());
+    const res = await withTimeout(fetch(ep(`azione=programma&${chiSono()}&da=${lun}&a=${addDays(lun, 13)}`)), 20000);
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.squadre)) return;
     const next = { squadre: out.squadre, at: Date.now() };
@@ -1550,7 +1551,37 @@ const isMe = o => !!db.user && [fullName(), db.user.last, `${db.user.last} ${db.
 function myPlan() {
   if (!db.plan || !db.user) return [];
   const oggi = isoDay(new Date());
-  return db.plan.squadre.filter(s => s.data >= oggi && s.operatori.some(isMe));
+  return db.plan.squadre.filter(s => s.data >= oggi && s.operatori.some(isMe)).sort(planOrd);
+}
+const planOrd = (a, b) => a.data.localeCompare(b.data) || PLAN_TURNI.findIndex(t => t.nome === a.turno) - PLAN_TURNI.findIndex(t => t.nome === b.turno);
+// Tutti i miei turni scaricati (anche i giorni già passati di questa settimana)
+const myPlanAll = () => !db.plan || !db.user ? [] : db.plan.squadre.filter(s => s.operatori.some(isMe)).sort(planOrd);
+// Programma completo: due settimane, si salva in PDF e da qui si compila il modulo ore
+function planFull() {
+  const all = myPlanAll(), lun = mondayOf(new Date()), oggi = isoDay(new Date());
+  const isD = doppi(db.plan ? db.plan.squadre : []);
+  const sett = [lun, addDays(lun, 7)];
+  const riga = s => { const t = turnoInfo(s.turno), ass = isAss(s.turno), ai = ass ? assInfo(s.turno) : null, altri = s.operatori.filter(o => !isMe(o));
+    const tc = !ass && turnoCliente(s.cantiere), orario = tc ? `${tc.inizio}–${tc.fine}` : t.orario;
+    return { s, testo: ass ? `${ai.icona} ${ai.nome}` : `${t.nome} ${orario}`, dove: ass ? (s.nota || '') : s.cantiere + (altri.length ? ' · con ' + altri.join(', ') : '') + (s.nota ? ' · ' + s.nota : ''), doppio: !ass && isD(s.data, s.operatori.find(isMe) || fullName()), passato: s.data < oggi }; };
+  const html = sett.map((w, k) => { const l = all.filter(s => s.data >= w && s.data <= addDays(w, 6)).map(riga);
+    return `<div class="sec-head" style="margin-top:${k ? 14 : 4}px"><div><small>${k ? 'SETTIMANA PROSSIMA' : 'QUESTA SETTIMANA'}</small><h3 style="margin:2px 0 0">dal ${dayFromIso(w).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })} al ${dayFromIso(addDays(w, 6)).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}</h3></div></div>
+      <ul class="list">${l.map(x => `<li style="${x.passato ? 'opacity:.55' : ''}"><div class="grow"><b>${esc(dayLabel(x.s.data))} · ${esc(x.testo)}</b><span>${esc(x.dove)}</span></div>${x.doppio ? '<span class="pill doppio">Doppio</span>' : ''}</li>`).join('') || '<li class="empty">Nessun turno in programma.</li>'}</ul>`; }).join('');
+  openDialog(`<h3>📅 Il mio programma</h3>${html}
+    <div class="menu">
+      <button class="btn" value="pdf">📄 Salva PDF / stampa</button>
+      <button class="btn ghost" value="mod">📝 Compila il modulo ore di questa settimana</button>
+      <button class="btn ghost" value="back">Chiudi</button>
+    </div>`, a => {
+    if (a === 'pdf') return setTimeout(() => dpiPrintHtml(planDoc(sett.map(w => [w, all.filter(s => s.data >= w && s.data <= addDays(w, 6)).map(riga)])), planFull), 50);
+    if (a === 'mod') return setTimeout(() => { modWeek = lun; modFonte = 'programma'; modShow(lun); }, 50);
+  });
+}
+function planDoc(settimane) {
+  return `<div class="plan-doc"><div class="pd-head"><img src="logo.png" alt="GEECO"><div><h1>Programma turni</h1><p>${esc(fullName())} · aggiornato al ${dayFromIso(isoDay(new Date())).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' })}</p></div></div>
+    ${settimane.map(([w, l]) => `<h2 style="font-size:14px;margin:12px 0 6px">Settimana dal ${dayFromIso(w).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' })} al ${dayFromIso(addDays(w, 6)).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' })}</h2>
+      <table class="pd-t"><thead><tr><th style="width:26%">Giorno</th><th style="width:24%">Turno</th><th>Cantiere e squadra</th></tr></thead>
+      <tbody>${l.map(x => `<tr><td>${esc(dayLabel(x.s.data))}</td><td>${esc(x.testo)}${x.doppio ? ' <b style="color:#b42318">(doppio)</b>' : ''}</td><td>${esc(x.dove)}</td></tr>`).join('') || '<tr><td colspan="3">Nessun turno.</td></tr>'}</tbody></table>`).join('')}</div>`;
 }
 // Avviso all'operatore: visita medica o corso scaduti, in scadenza entro 30 giorni o prenotati
 function renderMieScad() {
@@ -1577,7 +1608,9 @@ function renderPlan() {
   const isD = doppi(db.plan.squadre);
   const oggi = isoDay(new Date()), domani = addDays(oggi, 1);
   const when = d => d === oggi ? 'Oggi' : d === domani ? 'Domani' : dayLabel(d);
-  const rows = mine.slice(0, 4).map(s => {
+  const dom = addDays(mondayOf(new Date()), 6);
+  const questa = mine.filter(s => s.data <= dom);
+  const rows = (questa.length ? questa : mine.slice(0, 4)).map(s => {
     const t = turnoInfo(s.turno);
     if (isAss(s.turno)) { const ai = assInfo(s.turno); return `<li><span class="dot" style="background:${ai.colore}"></span>
       <div class="grow"><b>${esc(when(s.data))} · ${ai.icona} ${esc(ai.nome)}</b><span>${s.nota ? esc(s.nota) : 'Giorno di ' + esc(ai.nome.toLowerCase())}</span></div></li>`; }
@@ -1585,13 +1618,15 @@ function renderPlan() {
     const site = db.sites.find(x => x.name === s.cantiere);
     return `<li>
       <span class="dot" style="background:${esc(site ? site.color : 'var(--brand)')}"></span>
-      <div class="grow"><b>${esc(when(s.data))} · ${esc(t.nome)} ${esc(t.orario)}</b>
+      <div class="grow"><b>${esc(when(s.data))} · ${esc(t.nome)} ${esc(turnoCliente(s.cantiere) ? turnoCliente(s.cantiere).inizio + '–' + turnoCliente(s.cantiere).fine : t.orario)}</b>
         <span>${esc(s.cantiere)}${altri.length ? ' · con ' + esc(altri.join(', ')) : ''}${s.nota ? ' · ' + esc(s.nota) : ''}</span></div>
       ${isD(s.data, s.operatori.find(isMe) || me) ? '<span class="pill doppio">Doppio</span>' : ''}
     </li>`;
   });
-  box.innerHTML = `<div class="sec-head"><div><small>IL TUO PROGRAMMA</small><h2>Prossimi turni</h2></div></div>
-    <ul class="list">${rows.length ? rows.join('') : '<li class="empty">Nessun turno in programma per te nei prossimi giorni.</li>'}</ul>`;
+  box.innerHTML = `<div class="sec-head"><div><small>IL TUO PROGRAMMA</small><h2>${questa.length ? 'Questa settimana' : 'Prossimi turni'}</h2></div></div>
+    <ul class="list">${rows.length ? rows.join('') : '<li class="empty">Nessun turno in programma per te nei prossimi giorni.</li>'}</ul>
+    <button type="button" class="btn ghost" id="btnPlanFull" style="margin-top:10px;width:100%">📅 Tutto il programma · PDF · modulo ore</button>`;
+  $('#btnPlanFull').onclick = planFull;
 }
 
 // Responsabile: programma della settimana
@@ -1942,6 +1977,15 @@ const MOD_GIORNI = ['LUN', 'MAR', 'MER', 'GIO', 'VEN', 'SAB', 'DOM'];
 const MOD_BLOCCHI = 4;
 const hm = ms => { const m = Math.round(ms / 60000); return `${Math.floor(m / 60)}:${pad(m % 60)}`; };
 let modWeek = null;
+let modFonte = 'auto'; // auto: timbrature se ci sono, sennò il programma
+// Orari scritti nel modulo per un turno del programma (orario del servizio, ore fisse del cantiere)
+function planOrari(sq) {
+  const t = turnoCliente(sq.cantiere), ore = oreTurnoDi(sq.cantiere);
+  if (t) return { in: t.inizio, out: t.fine, tot: hm(ore * 3600000), ore };
+  const h0 = sq.turno === 'Pomeriggio' ? 13 : 6;
+  return { in: `${pad(h0)}:00`, out: `${pad(h0 + Math.floor(ore))}:${pad(Math.round((ore % 1) * 60))}`, tot: hm(ore * 3600000), ore };
+}
+const planDellaSettimana = week => myPlanAll().filter(s => s.data >= week && s.data <= addDays(week, 6) && !isAss(s.turno));
 // Si apre già compilato sulla settimana scorsa (si consegna il martedì per la settimana prima)
 function modPick() { modShow(modWeek || addDays(mondayOf(new Date()), -7)); }
 function modSettings(week) {
@@ -1960,19 +2004,22 @@ function modBlocks(week) {
   const da = dayFromIso(week).getTime(), a = dayFromIso(addDays(week, 7)).getTime();
   const conProve = (db.modulo || {}).prove !== false;
   const shifts = db.shifts.filter(s => s.end && s.start >= da && s.start < a && (conProve || !s.demo)).sort((x, y) => x.start - y.start);
+  const piano = planDellaSettimana(week);
+  const fonte = modFonte === 'programma' || (modFonte === 'auto' && !shifts.length && piano.length) ? 'programma' : 'timbrature';
+  const voci = fonte === 'programma'
+    ? piano.map(sq => ({ cantiere: sq.cantiere, day: (dayFromIso(sq.data).getDay() + 6) % 7, plan: sq }))
+    : shifts.map(s => ({ cantiere: siteById(s.siteId).name, day: (new Date(s.start).getDay() + 6) % 7, shift: s }));
   const blocks = [];
-  shifts.forEach(s => {
-    const name = siteById(s.siteId).name;
-    const day = (new Date(s.start).getDay() + 6) % 7;
-    let b = blocks.find(x => x.cantiere === name && !x.giorni[day]);
-    if (!b) { b = { cantiere: name, giorni: [] }; blocks.push(b); }
-    b.giorni[day] = s;
+  voci.forEach(v => {
+    let b = blocks.find(x => x.cantiere === v.cantiere && !x.giorni[v.day]);
+    if (!b) { b = { cantiere: v.cantiere, giorni: [] }; blocks.push(b); }
+    b.giorni[v.day] = v.shift || { plan: v.plan };
   });
-  return { blocks, shifts };
+  return { blocks, shifts: fonte === 'programma' ? piano : shifts, fonte, haPiano: piano.length > 0, haTimbrature: shifts.length > 0 };
 }
 function modDoc(week) {
   const m = db.modulo || {};
-  const { blocks, shifts } = modBlocks(week);
+  const { blocks, shifts, fonte, haPiano, haTimbrature } = modBlocks(week);
   const fine = addDays(week, 6);
   const dmy = iso => dayFromIso(iso).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' });
   const nome = db.user ? `${db.user.last} ${db.user.first}`.toUpperCase() : '';
@@ -1980,6 +2027,7 @@ function modDoc(week) {
   for (let i = 0; i < Math.max(1, blocks.length); i += MOD_BLOCCHI) pagine.push(blocks.slice(i, i + MOD_BLOCCHI));
   // Ore di cantiere fisse: ogni turno vale oreTurno ore, con l'orario di servizio del turno (06–11 o 13–18)
   const orari = s => {
+    if (s.plan) return planOrari(s.plan);
     const nome = siteById(s.siteId).name, t = turnoCliente(nome), ore = oreTimbratura(s);
     // Con il ritardo l'entrata scritta è l'orario + i minuti tolti (es. 06:30), e il totale scende
     const tolti = s.demo ? 0 : ritardoDi(nome, s.start).tolti;
@@ -2016,8 +2064,8 @@ function modDoc(week) {
       Il lavoratore sarà chiamato a rispondere in caso di anomalia tra quanto da esso dichiarato e quanto previsto dagli ordini di servizio. La ripetizione di eventuali abusi sarà punita conformemente a quanto prevede il nostro CCNL.</p>
     </div>
   </div>`;
-  const tot = shifts.reduce((t, x) => t + oreTimbratura(x) * 3600000, 0);
-  return { html: pagine.map(one).join('<div class="mod-cut"></div>'), turni: shifts.length, tot, moduli: pagine.length, prove: shifts.filter(s => s.demo).length };
+  const tot = fonte === 'programma' ? shifts.reduce((t, x) => t + planOrari(x).ore * 3600000, 0) : shifts.reduce((t, x) => t + oreTimbratura(x) * 3600000, 0);
+  return { html: pagine.map(one).join('<div class="mod-cut"></div>'), turni: shifts.length, tot, moduli: pagine.length, prove: fonte === 'programma' ? 0 : shifts.filter(s => s.demo).length, fonte, haPiano, haTimbrature };
 }
 // Crea il PDF del modulo sul telefono e lo condivide (WhatsApp, email…) al responsabile
 const loadScript = src => new Promise((ok, ko) => {
@@ -2080,7 +2128,9 @@ function modShow(week) {
   openDialog(`
     <h3>📝 Modulo ore</h3>
     <label class="mod-cal">📅 Settimana del<input type="date" id="modDate" value="${week}"></label>
-    <p class="note">${r.turni ? `${r.turni} turn${r.turni === 1 ? 'o' : 'i'} · ${hm(r.tot)} ore${r.moduli > 1 ? ` · ${r.moduli} moduli (più di 4 cantieri)` : ''}${r.prove ? ` · di cui ${r.prove} in modalità prova` : ''}` : 'Nessuna timbratura in questa settimana.'}</p>
+    <p class="note">${r.turni ? `${r.turni} turn${r.turni === 1 ? 'o' : 'i'} · ${hm(r.tot)} ore${r.moduli > 1 ? ` · ${r.moduli} moduli (più di 4 cantieri)` : ''}${r.prove ? ` · di cui ${r.prove} in modalità prova` : ''}` : 'Nessuna timbratura in questa settimana.'}
+      ${r.fonte === 'programma' ? '<br><b>Compilato dal programma</b>: controlla che corrisponda a quello che hai fatto davvero.' : ''}</p>
+    ${r.haPiano && r.haTimbrature ? `<button class="btn ghost" value="fonte">${r.fonte === 'programma' ? '⏱ Usa le mie timbrature' : '📅 Usa il programma'}</button>` : ''}
     <div class="mod-wrap"><div class="mod-scale">${r.html}</div></div>
     <div class="menu">
       <button class="btn" value="send" ${r.turni ? '' : 'disabled'}>📤 Invia a ${esc(cfg().autorizzaNome || 'responsabile')}</button>
@@ -2088,7 +2138,9 @@ function modShow(week) {
       <div class="row"><button class="btn ghost" value="prev">◀ Sett. prima</button><button class="btn ghost" value="next">Sett. dopo ▶</button></div>
       <div class="row"><button class="btn ghost" value="set">⚙️ Impostazioni</button><button class="btn ghost" value="back">Chiudi</button></div>
     </div>`, a => {
-    if (a === 'prev' || a === 'next') { modWeek = addDays(week, a === 'prev' ? -7 : 7); return setTimeout(() => modShow(modWeek), 50); }
+    if (a === 'prev' || a === 'next') { modWeek = addDays(week, a === 'prev' ? -7 : 7); modFonte = 'auto'; return setTimeout(() => modShow(modWeek), 50); }
+    if (a === 'fonte') { modFonte = r.fonte === 'programma' ? 'timbrature' : 'programma'; return setTimeout(() => modShow(week), 50); }
+    if (a === 'back') modFonte = 'auto';
     if (a === 'set') return setTimeout(() => modSettings(week), 50);
     if (a === 'send') return setTimeout(() => modSend(week, r), 50);
     if (a === 'back') return;
