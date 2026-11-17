@@ -133,7 +133,7 @@ function doPost(e) {
 function doGet(e) {
   if (e && e.parameter && e.parameter.azione && !codiceOk_(e.parameter.codice)) return json_({ ok: false, error: 'codice' });
   if (e && e.parameter && e.parameter.azione === 'programma') return json_(programmaPubblico_(e));
-  if (e && e.parameter && e.parameter.azione === 'interventi') return json_(interventiPubblico_(e));
+  if (e && e.parameter && e.parameter.azione === 'interventi') return json_(telefonoDi_(e.parameter.nome, e.parameter.device) ? interventiPubblico_(e) : { ok: true, interventi: [] });
   if (e && e.parameter && e.parameter.azione === 'fotointervento') {
     return json_({ ok: true, foto: fotoIntervento_(String(e.parameter.id || ''), String(e.parameter.tipo || '')) });
   }
@@ -141,7 +141,7 @@ function doGet(e) {
     return json_({ ok: true, assenze: assenze_().filter(a => a.device && a.device === String(e.parameter.device || '')) });
   }
   if (e && e.parameter && e.parameter.azione === 'cantieri') {
-    return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), committenti: committenti_(), fisso: fissoDi_(e.parameter.nome), scadenze: mieScadenze_(e.parameter.nome), config: {
+    return json_({ ok: true, cantieri: cantieri_(), colori: colori_(), committenti: committenti_(), fisso: fissoDi_(e.parameter.nome), scadenze: telefonoDi_(e.parameter.nome, e.parameter.device) ? mieScadenze_(e.parameter.nome) : [], config: {
       oreTurno: ORE_TURNO, tolleranzaMin: TOLLERANZA_MIN, turni: TURNI, sede: sede_(), zonaForeco: zonaForeco_(),
       autorizzaNome: AUTORIZZA_NOME.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_NOME,
       autorizzaTelefono: AUTORIZZA_TELEFONO.indexOf('INSERISCI') === 0 ? '' : AUTORIZZA_TELEFONO,
@@ -1169,12 +1169,46 @@ function salvaProgramma_(da, a, squadre) {
 }
 
 /** Per gli operatori (senza password): le squadre dei prossimi giorni. */
+// Ogni operatore riceve solo le squadre in cui c'è lui (con i compagni di squadra), e solo dal suo telefono
 function programmaPubblico_(e) {
+  const nome = e.parameter.nome;
+  if (!telefonoDi_(nome, e.parameter.device)) return { ok: true, squadre: [] };
   const oggi = new Date(); oggi.setHours(0, 0, 0, 0);
   const fra = new Date(oggi.getTime() + 13 * 864e5);
   const da = daIso_(e.parameter.da) ? e.parameter.da : dataIso_(oggi);
   const a = daIso_(e.parameter.a) ? e.parameter.a : dataIso_(fra);
-  return { ok: true, squadre: programma_(da, a) };
+  return { ok: true, squadre: programma_(da, a).filter(s => (s.operatori || []).some(o => mioNome_(o, nome))) };
+}
+
+/** "Grandoni" o "Grandoni Andrea" nel foglio valgono per "Andrea Grandoni" nell'app. */
+function mioNome_(op, nome) {
+  const toks = String(nome || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const k = String(op || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return toks.length > 0 && k.length > 0 && k.every(t => toks.indexOf(t) >= 0);
+}
+
+/**
+ * Il telefono è davvero di quell'operatore? Sì se con quel nome ha già timbrato o chiesto ferie da quel telefono.
+ * Un operatore nuovo, mai visto, viene legato al primo telefono che usa (cambio telefono: dopo la prima timbratura col nuovo).
+ */
+function telefonoDi_(nome, device) {
+  const n = String(nome || '').trim().toLowerCase(), d = String(device || '').trim();
+  if (!n || !d) return false;
+  const cache = CacheService.getScriptCache();
+  const key = 'tel_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, n + '|' + d));
+  if (cache.get(key) === '1') return true;
+  let ok = false;
+  const sh = foglio_(), last = sh.getLastRow();
+  if (last > 1) ok = sh.getRange(2, 2, last - 1, 8).getValues().some(r => String(r[0]).trim().toLowerCase() === n && String(r[7]) === d);
+  if (!ok) ok = assenze_().some(a => a.device === d && a.dip.trim().toLowerCase() === n);
+  if (!ok) {
+    const props = PropertiesService.getScriptProperties(), k = 'TEL_' + n.slice(0, 80);
+    const giaVisto = last > 1 && sh.getRange(2, 2, last - 1, 1).getValues().some(r => String(r[0]).trim().toLowerCase() === n);
+    const legato = props.getProperty(k);
+    if (!legato && !giaVisto) { props.setProperty(k, d); ok = true; } else ok = legato === d;
+  }
+  if (ok) cache.put(key, '1', 600);
+  return ok;
 }
 
 // ---------- Interventi (segnalazioni da ritirare) ----------

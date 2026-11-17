@@ -56,13 +56,15 @@ function load() {
 }
 // Registro aziendale GEECO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 70;
+const APP_VERSION = 71;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
 db.endpoint = db.endpoint || DEFAULT_ENDPOINT;
 // Codice di accesso aziendale: arriva dal link di invito (?codice=…) e accompagna ogni richiesta allo script
 const ep = q => `${db.endpoint}?${q}&codice=${encodeURIComponent(db.codice || '')}`;
+// Nome e telefono: il registro risponde con i dati di chi usa davvero questo telefono
+const chiSono = () => `nome=${encodeURIComponent(fullName())}&device=${encodeURIComponent(db.user && db.user.device || '')}`;
 function save() {
   // Durante la demo non si scrive niente sul telefono: i dati veri restano com'erano
   if (DEMO.on) { render(); return; }
@@ -635,7 +637,7 @@ let intSeen = null;
 async function syncInterventi() {
   if (!db.endpoint || !db.user || navigator.onLine === false) return;
   try {
-    const res = await withTimeout(fetch(ep(`azione=interventi&nome=${encodeURIComponent(fullName())}`)), 20000);
+    const res = await withTimeout(fetch(ep(`azione=interventi&${chiSono()}`)), 20000);
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.interventi)) return;
     const prima = new Set((db.interventi || []).map(x => x.id));
@@ -1535,7 +1537,8 @@ function doppi(squadre) {
 async function syncPlan() {
   if (!db.endpoint || navigator.onLine === false) return;
   try {
-    const res = await withTimeout(fetch(ep('azione=programma')), 20000);
+    if (!db.user) return;
+    const res = await withTimeout(fetch(ep(`azione=programma&${chiSono()}`)), 20000);
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.squadre)) return;
     const next = { squadre: out.squadre, at: Date.now() };
@@ -2343,7 +2346,7 @@ async function flush() {
 async function syncSites() {
   if (!db.endpoint || navigator.onLine === false) return;
   try {
-    const res = await fetch(ep(`azione=cantieri&nome=${encodeURIComponent(fullName())}`));
+    const res = await fetch(ep(`azione=cantieri&${db.user ? chiSono() : 'nome='}`));
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.cantieri)) return;
     // Impianto fisso (es. operatori che lavorano sempre nello stesso stabilimento)
