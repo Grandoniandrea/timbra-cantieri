@@ -56,7 +56,7 @@ function load() {
 }
 // Registro aziendale GEECO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 73;
+const APP_VERSION = 74;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -640,18 +640,33 @@ async function syncInterventi() {
     const res = await withTimeout(fetch(ep(`azione=interventi&${chiSono()}`)), 20000);
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.interventi)) return;
-    const prima = new Set((db.interventi || []).map(x => x.id));
-    const nuovi = out.interventi.filter(x => x.stato !== 'Fatto' && !prima.has(x.id));
-    if (JSON.stringify(out.interventi) !== JSON.stringify(db.interventi)) { db.interventi = out.interventi; save(); }
-    if (intSeen && nuovi.length) {
-      toast(nuovi.length === 1 ? `📍 Nuovo intervento: ${intWhere(nuovi[0])}` : `📍 ${nuovi.length} nuovi interventi`);
-      if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-    }
+    if (JSON.stringify(out.interventi) !== JSON.stringify(db.interventi)) { db.interventi = out.interventi; save(); render(); }
+    // Finestra che si apre da sola per ogni intervento nuovo assegnato a me (una volta sola per intervento)
+    const visti = db.intVisti || (db.intVisti = {});
+    const nuovi = out.interventi.filter(x => x.stato !== 'Fatto' && !intDoneLocal(x.id) && !visti[x.id]);
+    if (nuovi.length) intPopup(nuovi);
     intSeen = true;
   } catch (e) { /* offline o script da aggiornare */ }
 }
 setInterval(() => { if (!document.hidden) syncInterventi(); }, 60000);
 const intDoneLocal = id => (db.intChiusi || {})[id];
+function intPopup(nuovi) {
+  // Se c'è già una finestra aperta si aspetta che si chiuda, poi riprova al prossimo controllo
+  if (dlg.open || DEMO.on) return;
+  nuovi.forEach(x => { db.intVisti[x.id] = Date.now(); });
+  const ids = Object.keys(db.intVisti); if (ids.length > 300) ids.slice(0, ids.length - 300).forEach(k => delete db.intVisti[k]);
+  save();
+  if (navigator.vibrate) navigator.vibrate([300, 120, 300, 120, 300]);
+  const oggi = isoDay(new Date());
+  openDialog(`<h3>📍 ${nuovi.length === 1 ? 'Nuovo intervento per te' : nuovi.length + ' nuovi interventi per te'}</h3>
+    <ul class="list">${nuovi.map(x => `<li><span class="dot" style="background:#dc2626"></span><div class="grow"><b>${esc(intWhere(x) || 'Intervento')}</b>
+      <span>${x.data ? (x.data === oggi ? 'Oggi' : esc(dayLabel(x.data))) + ' · ' : ''}${esc(x.cosa || 'da ritirare')}${x.cliente ? ' · ' + esc(x.cliente) : ''}${x.note ? ' · ' + esc(x.note) : ''}</span></div></li>`).join('')}</ul>
+    <div class="menu"><button class="btn" value="open">${nuovi.length === 1 ? 'Apri l\'intervento' : 'Vedi gli interventi'}</button><button class="btn ghost" value="ok">Ho visto</button></div>`, a => {
+    if (a !== 'open') return;
+    if (nuovi.length === 1) setTimeout(() => intView(nuovi[0].id), 50);
+    else setTimeout(() => { const b = $('#interventi'); if (b) b.scrollIntoView({ behavior: 'smooth' }); }, 50);
+  });
+}
 function renderInterventi() {
   const box = $('#interventi');
   if (!box) return;

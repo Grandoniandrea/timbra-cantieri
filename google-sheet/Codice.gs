@@ -1335,7 +1335,8 @@ function fotoIntervento_(id, tipo) {
 function interventiPubblico_(e) {
   const nome = String(e.parameter.nome || '').trim().toLowerCase();
   const limite = Date.now() - 2 * 864e5;
-  const lista = interventi_().filter(x => (x.assegnato === INT_TUTTI || x.assegnato.toLowerCase() === nome) &&
+  // "Grandoni" assegnato dal responsabile vale per "Andrea Grandoni" nell'app (e viceversa)
+  const lista = interventi_().filter(x => (x.assegnato === INT_TUTTI || x.assegnato.toLowerCase() === nome || mioNome_(x.assegnato, nome) || mioNome_(nome, x.assegnato)) &&
     (x.stato === INT_DA_FARE || (x.fattoIl && x.fattoIl > limite)));
   return { ok: true, interventi: lista };
 }
