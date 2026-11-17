@@ -1562,17 +1562,22 @@ function scImport() {
       else {
         // Script Google non ancora aggiornato: si salva una data alla volta (più lento)
         if (piano.nuoveVoci.length) out = await queued('scadvoci', { voci: S.cache.scad.voci.concat(piano.nuoveVoci) });
+        // Tre date alla volta in parallelo e schermo tenuto acceso, così dal telefono fa prima
+        let wake = null; try { wake = navigator.wakeLock ? await navigator.wakeLock.request('screen') : null; } catch (err) { wake = null; }
         n = 0;
-        for (const r of piano.righe) {
-          prog(`Script Google da aggiornare: salvo una data alla volta… ${n + 1} di ${piano.righe.length}`);
+        const coda = piano.righe.slice(), tot = coda.length;
+        const salvaUna = async r => {
           const reg = Object.assign({ id: uid() }, r);
           // Se la rete salta ("Load failed") si riprova la stessa data, con lo stesso id: non si duplica
           for (let t = 1; ; t++) {
-            try { out = await queued('scadreg', { reg }); break; }
-            catch (err) { if (err && err.message === 'auth' || t >= 4) throw err; prog(`Connessione persa, riprovo… (${n + 1} di ${piano.righe.length})`); await new Promise(ok => setTimeout(ok, 2500 * t)); }
+            try { const o = await api('scadreg', { reg }); if (!S.cache.scad || o.righe.length >= S.cache.scad.righe.length) { out = o; S.cache.scad = o; } break; }
+            catch (err) { if (err && err.message === 'auth' || t >= 5) throw err; prog(`Connessione persa, riprovo… (${n} di ${tot} salvate)`); await new Promise(ok => setTimeout(ok, 2500 * t)); }
           }
-          S.cache.scad = out; n++;
-        }
+          n++; prog(`Salvo… ${n} di ${tot} (tieni la pagina aperta)`);
+        };
+        const lavoratore = async () => { try { while (coda.length) await salvaUna(coda.shift()); } catch (err) { coda.length = 0; throw err; } };
+        try { await Promise.all([lavoratore(), lavoratore(), lavoratore()]); }
+        finally { try { if (wake) wake.release(); } catch (err) { /* niente */ } }
       }
       S.cache.scad = out; S.dipAll = true;
       dlg.close(); toast(`Importate ${n} date`);
