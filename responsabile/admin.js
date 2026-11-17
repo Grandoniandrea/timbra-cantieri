@@ -1025,14 +1025,32 @@ function pDpi() {
   const righe = Object.values(last).filter(c => !ops.size || ops.has(c.operatore.toLowerCase())).filter(c => match(c.operatore, c.capo))
     .map(c => { const g = daysTo(c.scadenza); return Object.assign({}, c, { g, st: g === null ? 'na' : g < 0 ? 'over' : g <= FINESTRA_SCAD ? 'under' : 'ok' }); })
     .sort((a, b) => ({ over: 0, under: 1, ok: 2, na: 3 })[a.st] - ({ over: 0, under: 1, ok: 2, na: 3 })[b.st] || (a.scadenza || '9').localeCompare(b.scadenza || '9'));
-  const stChip = r => r.st === 'over' ? chip('no', `Scaduto da ${-r.g} g`) : r.st === 'under' ? chip('wait', r.g === 0 ? 'Scade oggi' : `Scade tra ${r.g} g`) : r.st === 'ok' ? chip('ok', 'In regola') : chip('grey', 'Senza scadenza');
+  const stChip = r => r.st === 'over' ? chip('no blink', `Scaduto da ${-r.g} g`) : r.st === 'under' ? chip('wait blink slow', r.g === 0 ? 'Scade oggi' : `Scade tra ${r.g} g`) : r.st === 'ok' ? chip('ok', 'In regola') : chip('grey', 'Senza scadenza');
+  // Filtro come nello specchietto dei dipendenti
+  const nO = righe.filter(r => r.st === 'over').length, nU = righe.filter(r => r.st === 'under').length;
+  const F = S.dpiF || (nO + nU ? 'rischio' : 'tutti');
+  const vis = righe.filter(r => F === 'tutti' || (F === 'scaduti' ? r.st === 'over' : F === 'scadenza' ? r.st === 'under' : r.st === 'over' || r.st === 'under'));
+  const filtri = `<div class="seg filt" role="group" aria-label="Filtro">${[['rischio', `Da sistemare (${nO + nU})`, ''], ['scaduti', `Scaduti (${nO})`, nO ? 'no' : ''], ['scadenza', `In scadenza (${nU})`, nU ? 'wait' : ''], ['tutti', `Tutti (${righe.length})`, '']]
+    .map(([k, t, c]) => `<button class="btn sm ${F === k ? '' : 'plain'} ${F !== k && c ? 'f-' + c : ''}" data-dpif="${k}" aria-pressed="${F === k}">${t}</button>`).join('')}</div>`;
+  // Dotazioni per operatore
+  const persone = dpiPeople(d).filter(n => match(n)).map(n => { const mie = righe.filter(r => sameName(r.operatore, n));
+    return { n, tot: mie.length, o: mie.filter(r => r.st === 'over').length, u: mie.filter(r => r.st === 'under').length }; })
+    .sort((a, b) => (b.o - a.o) || (b.u - a.u) || a.n.localeCompare(b.n, 'it'));
+  const perOp = `<article class="card"><div class="card-head"><h2>Dotazioni per operatore</h2><small>tocca un nome: taglie, consegne, scheda da firmare</small></div>
+    <div class="rows">${persone.map(x => `<button class="row prow" data-dpiop="${esc(x.n)}"><div class="ini c${x.o ? 3 : x.u ? 1 : 0}" aria-hidden="true">${esc(initials(x.n))}</div>
+      <div class="txt"><b>${esc(x.n)}</b><span>${x.tot ? `${x.tot} ${x.tot === 1 ? 'capo consegnato' : 'capi consegnati'}` : 'nessuna consegna'}</span></div>
+      ${x.o ? chip('no blink', `${x.o} ${x.o === 1 ? 'scaduto' : 'scaduti'}`) : ''}${x.u ? chip('wait blink slow', `${x.u} in scadenza`) : ''}${x.tot && !x.o && !x.u ? chip('ok', 'In regola') : ''}
+      <span class="btn plain sm" aria-hidden="true">Apri</span></button>`).join('') || '<p class="empty">Nessun operatore.</p>'}</div></article>`;
   const ordine = {};
   righe.filter(r => r.st === 'over' || r.st === 'under').forEach(r => { const k = r.capo + (r.taglia ? ' · ' + r.taglia : ''); ordine[k] = (ordine[k] || 0) + (r.qta || 1); });
   if (!Array.isArray(d.capi)) return head() + errBox('Per usare DPI e vestiario va aggiornato lo script Google (guida nel repository).');
   return head(`<button class="btn" data-act="dpiNew">${icon('plus')}Nuova consegna</button><button class="btn ghost" data-act="capi">Capi e durata</button><button class="btn plain" data-act="printScheda">Scheda da firmare</button>`) + `<div class="grid" style="gap:16px">
+    ${(nO || nU) ? `<div class="scad-alert${nO ? '' : ' only-wait'}" role="status"><span class="dot blink${nO ? '' : ' slow'}" aria-hidden="true"></span><p>${nO ? `<b>${nO} ${nO === 1 ? 'capo scaduto' : 'capi scaduti'}</b>` : ''}${nO && nU ? ' · ' : ''}${nU ? `<b>${nU} in scadenza</b> nei prossimi ${FINESTRA_SCAD} giorni` : ''}</p></div>` : ''}
+    ${filtri}
     <div class="table-box"><table><thead><tr><th>Operatore</th><th>Capo</th><th>Taglia</th><th>Consegnato</th><th>Scadenza</th><th>Stato</th></tr></thead><tbody>
-    ${righe.map(r => `<tr data-dedit="${esc(r.id)}"><td class="name"><button class="link" data-dedit="${esc(r.id)}" style="color:var(--ink);text-decoration:none">${esc(r.operatore)}</button></td><td>${esc(r.capo)}</td><td>${esc(r.taglia || '—')}</td><td>${fmtIso(r.data)}</td><td>${fmtIso(r.scadenza)}</td><td>${stChip(r)}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Nessuna consegna registrata.</td></tr>'}
+    ${vis.map(r => `<tr data-dedit="${esc(r.id)}"><td class="name"><button class="link" data-dpiop="${esc(r.operatore)}" style="color:var(--ink);text-decoration:none">${esc(r.operatore)}</button></td><td>${esc(r.capo)}</td><td>${esc(r.taglia || '—')}</td><td>${fmtIso(r.data)}</td><td>${fmtIso(r.scadenza)}</td><td>${stChip(r)}</td></tr>`).join('') || `<tr><td colspan="6" class="empty">${righe.length ? 'Niente in questo elenco. ✓' : 'Nessuna consegna registrata.'}</td></tr>`}
     </tbody></table></div>
+    ${perOp}
     <article class="card"><h2>Da ordinare</h2><p class="sub">Capi scaduti o in scadenza nei prossimi ${FINESTRA_SCAD} giorni</p>
       ${Object.keys(ordine).length ? `<ul style="margin:0;padding-left:18px;display:grid;gap:6px">${Object.entries(ordine).map(([k, n]) => `<li>${n} × ${esc(k)}</li>`).join('')}</ul><button class="btn ghost" data-act="printOrder">Stampa per il fornitore</button>` : '<p class="empty">Niente da ordinare. ✓</p>'}
       <p class="sub">Tocca una riga della tabella per modificare o eliminare la consegna.</p></article></div>`;
@@ -1557,7 +1575,7 @@ function dpiNew(nome) {
     dlg.close(); toast('Registro la consegna…');
     try { S.cache.dpi = await queued('dpiconsegna', { consegna: { id: uid(), data: String(f.get('data') || todayIso()), operatore: op, righe, note: String(f.get('note') || '').trim(), taglie } }); toast(`Consegna registrata (${righe.length} ${righe.length === 1 ? 'capo' : 'capi'})`); }
     catch (err) { const w = why(err); if (w) toast(w); }
-    renderPage();
+    renderPage(); if (nome) dpiOp(op);
   });
 }
 function dpiEdit(id) {
@@ -1617,6 +1635,48 @@ function printOrder() {
   const rows = Object.values(m).sort((a, b) => a.capo.localeCompare(b.capo));
   printDoc(`<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GEECO"><div><h1>DPI e vestiario da ordinare</h1><p>Aggiornato al ${fmtIso(todayIso())}</p></div></div>
     <table><thead><tr><th>Capo</th><th>Taglia</th><th>Quantità</th><th>Per</th></tr></thead><tbody>${rows.map(r => `<tr><td>${esc(r.capo)}</td><td>${esc(r.taglia)}</td><td><b>${r.qta}</b></td><td>${r.chi.map(esc).join(', ')}</td></tr>`).join('') || '<tr><td colspan="4">Niente da ordinare.</td></tr>'}</tbody></table></div>`);
+}
+// Scheda dell'operatore: taglie, ogni capo (anche mai consegnato), nuova consegna, scheda da firmare, storico
+function dpiOp(nome) {
+  const d = S.cache.dpi; if (!d || d.error) return;
+  const t = taglieDi(d, nome), att = {};
+  (d.consegne || []).filter(c => sameName(c.operatore, nome)).forEach(c => { if (!att[c.capo] || att[c.capo].data < c.data) att[c.capo] = c; });
+  const capi = (d.capi || []).filter(c => c.attivo || att[c.nome]);
+  const st = c => { const g = daysTo(c.scadenza); return g === null ? chip('grey', 'senza scadenza') : g < 0 ? chip('no blink', `scaduto da ${-g} g`) : g <= FINESTRA_SCAD ? chip('wait blink slow', g === 0 ? 'scade oggi' : `tra ${g} g`) : chip('ok', 'In regola'); };
+  openDlg(`<form id="dpiOpForm" style="display:grid;gap:12px"><h2>${esc(nome)}</h2>
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">${['maglia', 'pantalone', 'scarpe'].map(k => `<label class="field">${TAGLIA_LBL[k]}<input name="${k}" maxlength="10" value="${esc(t[k] || '')}" placeholder="${k === 'maglia' ? 'es. L' : k === 'pantalone' ? 'es. 48' : 'es. 43'}"></label>`).join('')}</div>
+    <div class="rows">${capi.map(c => { const x = att[c.nome];
+      return x ? `<button type="button" class="row prow-d" data-dedit="${esc(x.id)}" style="border:0;background:transparent;text-align:left;width:100%;cursor:pointer;font:inherit;color:inherit"><div class="txt"><b>${esc(c.nome)}${x.taglia ? ` · ${esc(x.taglia)}` : ''}</b><span>consegnato il ${fmtIso(x.data)}${x.qta > 1 ? ` (×${x.qta})` : ''}${x.scadenza ? ' · scade ' + fmtIso(x.scadenza) : ''}</span></div>${st(x)}<span class="btn plain sm" aria-hidden="true">Modifica</span></button>`
+        : `<div class="row prow-d"><div class="txt"><b>${esc(c.nome)}</b><span>mai consegnato</span></div>${chip('grey', '—')}</div>`; }).join('') || '<p class="empty">Nessun capo: aggiungili da «Capi e durata».</p>'}</div>
+    <div class="actions" style="flex-wrap:wrap"><button type="button" class="btn plain" data-act="close">Chiudi</button><button type="button" class="btn ghost" id="dpiSto">Tutte le consegne</button><button type="button" class="btn ghost" id="dpiPdf">Scheda da firmare</button><button type="submit" class="btn ghost">Salva taglie</button><button type="button" class="btn" id="dpiNuova">${icon('plus')}Nuova consegna</button></div></form>`);
+  $('#dpiNuova').addEventListener('click', () => dpiNew(nome));
+  $('#dpiPdf').addEventListener('click', () => { dlg.close(); printDoc(schedaDoc(d, nome)); });
+  $('#dpiSto').addEventListener('click', () => dpiStorico(nome));
+  $('#dpiOpForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target), taglie = { maglia: String(f.get('maglia') || '').trim(), pantalone: String(f.get('pantalone') || '').trim(), scarpe: String(f.get('scarpe') || '').trim(), note: t.note || '' };
+    toast('Salvo le taglie…');
+    try { S.cache.dpi = await queued('dpitaglie', { operatore: nome, taglie }); toast('Taglie salvate'); } catch (err) { const w = why(err); if (w) toast(w); }
+    renderPage(); dpiOp(nome);
+  });
+}
+function dpiStorico(nome) {
+  const d = S.cache.dpi; if (!d || d.error) return;
+  const cons = (d.consegne || []).filter(c => sameName(c.operatore, nome)).sort((a, b) => b.data.localeCompare(a.data));
+  openDlg(`<h2>Consegne a ${esc(nome)}</h2><p class="sub">Tocca una consegna per modificarla o eliminarla.</p>
+    <div class="rows">${cons.map(c => `<button type="button" class="row prow-d" data-dedit="${esc(c.id)}" style="border:0;background:transparent;text-align:left;width:100%;cursor:pointer;font:inherit;color:inherit"><div class="txt"><b>${esc(c.capo)}${c.taglia ? ` · ${esc(c.taglia)}` : ''}</b><span>${fmtIso(c.data)}${c.qta > 1 ? ` · ×${c.qta}` : ''}${c.scadenza ? ` · scade ${fmtIso(c.scadenza)}` : ''}${c.note ? ` · ${esc(c.note)}` : ''}</span></div><span class="btn plain sm" aria-hidden="true">Modifica</span></button>`).join('') || '<p class="empty">Nessuna consegna.</p>'}</div>
+    <div class="actions"><button type="button" class="btn plain" id="dpiBack">Indietro</button></div>`);
+  $('#dpiBack').addEventListener('click', () => dpiOp(nome));
+}
+function schedaDoc(d, nome) {
+  const t = taglieDi(d, nome);
+  const cons = (d.consegne || []).filter(c => sameName(c.operatore, nome)).sort((a, b) => a.data.localeCompare(b.data));
+  return `<div class="pdoc"><div class="pdoc-h"><img src="../logo.png" alt="GEECO"><div><h1>Scheda consegna DPI e vestiario</h1>
+      <p>Operatore: <b>${esc(nome)}</b> · Taglie: maglia ${esc(t.maglia || '—')}, pantalone ${esc(t.pantalone || '—')}, scarpe ${esc(t.scarpe || '—')}</p></div></div>
+      <table><thead><tr><th>Data</th><th>Capo / DPI</th><th>Taglia</th><th>Q.tà</th><th>Scadenza</th><th style="width:22%">Firma operatore</th></tr></thead>
+      <tbody>${cons.map(c => `<tr><td>${fmtIso(c.data)}</td><td>${esc(c.capo)}</td><td>${esc(c.taglia || '')}</td><td>${c.qta}</td><td>${c.scadenza ? fmtIso(c.scadenza) : ''}</td><td style="height:26px"></td></tr>`).join('') || '<tr><td colspan="6">Nessuna consegna registrata.</td></tr>'}</tbody></table>
+      <p>Il lavoratore dichiara di aver ricevuto i dispositivi sopra indicati e si impegna a utilizzarli correttamente e a conservarli con cura (D.Lgs. 81/2008, art. 20 e 78).</p>
+      <p style="margin-top:22px">Data ________________ &nbsp; Firma del lavoratore ______________________ &nbsp; Firma del responsabile ______________________</p></div>`;
 }
 function printScheda() {
   const d = S.cache.dpi; if (!d || d.error) return;
@@ -1818,7 +1878,7 @@ function moreMenu() {
 // ---------- Eventi ----------
 document.addEventListener('click', e => {
   if (document.body.classList.contains('printing')) endPrint();
-  const el = e.target.closest('[data-ctredit],[data-accedit],[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy],[data-dipall],[data-dipf],[data-scperson],[data-scpren]');
+  const el = e.target.closest('[data-ctredit],[data-accedit],[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy],[data-dipall],[data-dipf],[data-scperson],[data-scpren],[data-dpiop],[data-dpif]');
   if (!el) return;
   const d = el.dataset;
   if (d.go) return go(d.go);
@@ -1829,6 +1889,8 @@ document.addEventListener('click', e => {
   if (d.ctredit) return ctrEdit(d.ctredit);
   if (d.tedit) return tEdit(d.tedit);
   if (d.dedit) return dpiEdit(d.dedit);
+  if (d.dpiop) return dpiOp(d.dpiop);
+  if (d.dpif) { S.dpiF = d.dpif; return renderPage(); }
   if (d.screg) { const [op, voce] = d.screg.split('|'); return scReg({ operatore: op, voce }); }
   if (d.scedit) { const r = S.cache.scad && S.cache.scad.righe.find(x => x.id === d.scedit); return r && scReg(Object.assign({}, r)); }
   if (d.sq) return sqEdit(d.sq);
@@ -2007,6 +2069,7 @@ async function demoApi(azione, x) {
       if (x.consegna.taglie) D.dpi.taglie[x.consegna.operatore.toLowerCase()] = x.consegna.taglie; return ok(D.dpi);
     case 'dpielimina': D.dpi.consegne = D.dpi.consegne.filter(c => c.id !== x.id); return ok(D.dpi);
     case 'dpicapi': D.dpi.capi = clone(x.capi); return ok(D.dpi);
+    case 'dpitaglie': D.dpi.taglie = D.dpi.taglie || {}; D.dpi.taglie[String(x.operatore).toLowerCase()] = x.taglie; return ok(D.dpi);
     case 'scadreg': D.scad.righe = D.scad.righe.filter(r => r.id !== x.reg.id).concat([Object.assign({}, x.reg)]); return ok(D.scad);
     case 'scadelimina': D.scad.righe = D.scad.righe.filter(r => r.id !== x.id); return ok(D.scad);
     case 'scadvoci': D.scad.voci = clone(x.voci); return ok(D.scad);
