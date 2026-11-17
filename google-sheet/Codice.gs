@@ -1188,8 +1188,8 @@ function mioNome_(op, nome) {
 }
 
 /**
- * Il telefono è davvero di quell'operatore? Sì se con quel nome ha già timbrato o chiesto ferie da quel telefono.
- * Un operatore nuovo, mai visto, viene legato al primo telefono che usa (cambio telefono: dopo la prima timbratura col nuovo).
+ * Il telefono è davvero di quell'operatore? Sì se con quel nome ha già timbrato o chiesto ferie da quel telefono,
+ * oppure se è il primo telefono che chiede i dati di quel nome (da lì in poi resta legato a quel telefono).
  */
 function telefonoDi_(nome, device) {
   const n = String(nome || '').trim().toLowerCase(), d = String(device || '').trim();
@@ -1202,10 +1202,10 @@ function telefonoDi_(nome, device) {
   if (last > 1) ok = sh.getRange(2, 2, last - 1, 8).getValues().some(r => String(r[0]).trim().toLowerCase() === n && String(r[7]) === d);
   if (!ok) ok = assenze_().some(a => a.device === d && a.dip.trim().toLowerCase() === n);
   if (!ok) {
+    // Nessuna prova nel registro: il nome si lega al primo telefono che lo chiede; dopo, gli altri telefoni non ricevono niente
     const props = PropertiesService.getScriptProperties(), k = 'TEL_' + n.slice(0, 80);
-    const giaVisto = last > 1 && sh.getRange(2, 2, last - 1, 1).getValues().some(r => String(r[0]).trim().toLowerCase() === n);
     const legato = props.getProperty(k);
-    if (!legato && !giaVisto) { props.setProperty(k, d); ok = true; } else ok = legato === d;
+    if (!legato) { props.setProperty(k, d); ok = true; } else ok = legato === d;
   }
   if (ok) cache.put(key, '1', 600);
   return ok;

@@ -634,3 +634,7 @@ dialog .btn:has(> .ico) { display: flex; justify-content: flex-start; text-align
 .ms-dot { width: 12px; height: 12px; border-radius: 50%; margin-top: 5px; flex: none; background: #f59e0b; animation: ms-blink 1.8s ease-in-out infinite; }
 .ms-row.over .ms-dot { background: #dc2626; animation-duration: 1s; }
 .ms-row.book .ms-dot { background: #2f6fd6; animation: none; }
+/* Testo sempre leggibile anche con il tema scuro */
+.mie-scad, .mie-scad b { color: #1f1f1e; }
+.mie-scad small, .mie-scad .ms-row span { color: #4a4a48; }
+.mie-scad.bad small { color: #7f1414; }
