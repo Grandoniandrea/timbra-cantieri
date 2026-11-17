@@ -125,3 +125,11 @@ Quando dall'app si salva l'elenco cantieri, la colonna E "Committente" ora segue
 - L'email delle 20 ha la sezione "Ritardi oggi".
 - Uscire dopo l'orario non dà straordinario: il turno vale sempre le sue ore fisse.
 - Gli orari si cambiano in `ORARI_TURNO` nello script (e nella stessa costante in app.js).
+
+## Aggiornamento: importazione da Excel di visite e corsi
+Area responsabile → Dipendenti → **Importa da Excel**: si scelgono il file "Formazione" e il
+"Tabellone scadenze visite mediche" esportati dall'azienda. Entrano solo nomi e date (niente esiti
+o idoneità), i doppioni si saltano e le celle grigie ("scaduto ma da non rinnovare") restano fuori.
+Con il nuovo `Codice.gs` (azione `scadimporta`) si salva tutto in pochi secondi: installa il file
+completo e pubblica una nuova versione del deployment. Con lo script vecchio funziona lo stesso,
+ma salva una data alla volta e ci mette diversi minuti.

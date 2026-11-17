@@ -1041,9 +1041,20 @@ function scUltime(sc) {
   sc.righe.forEach(r => { const k = r.operatore.toLowerCase() + '|' + r.voce.toLowerCase(); if (!m[k] || m[k].fatto < r.fatto) m[k] = r; });
   return Object.values(m);
 }
+// Chi compare nelle scadenze: tutti (anche i dipendenti importati dagli Excel aziendali) tranne gli operatori disattivati
+function scSpenti(sc) { return new Set((sc.operatori || []).filter(o => o.attivo === false).map(o => o.nome.toLowerCase())); }
 function scVicine(sc) {
-  const attivi = new Set((sc.operatori || []).filter(o => o.attivo !== false).map(o => o.nome.toLowerCase()));
-  return scUltime(sc).filter(r => (!attivi.size || attivi.has(r.operatore.toLowerCase())) && r.scadenza && daysTo(r.scadenza) <= FINESTRA_SCAD).sort((a, b) => a.scadenza.localeCompare(b.scadenza));
+  const spenti = scSpenti(sc);
+  return scUltime(sc).filter(r => !spenti.has(r.operatore.toLowerCase()) && r.scadenza && daysTo(r.scadenza) <= FINESTRA_SCAD).sort((a, b) => a.scadenza.localeCompare(b.scadenza));
+}
+// Dipendenti nella tabella: gli operatori del programma, oppure tutta l'azienda (anche chi è solo negli Excel importati)
+function scPersone(sc, tutti) {
+  const ops = (sc.operatori || []).filter(o => o.attivo !== false).map(o => o.nome);
+  if (!tutti) return ops;
+  const spenti = scSpenti(sc), visti = new Set(ops.map(n => n.toLowerCase()));
+  const altri = [];
+  sc.righe.forEach(r => { const k = r.operatore.toLowerCase(); if (!visti.has(k) && !spenti.has(k)) { visti.add(k); altri.push(r.operatore); } });
+  return ops.concat(altri.sort((a, b) => a.localeCompare(b, 'it')));
 }
 const scTxt = r => { const g = daysTo(r.scadenza); return g === null ? 'senza scadenza' : g < 0 ? `scaduto da ${-g} g` : g === 0 ? 'scade oggi' : `scade tra ${g} g`; };
 function pDipendenti() {
@@ -1051,8 +1062,13 @@ function pDipendenti() {
   if (!sc || sc.error) return head() + (sc && sc.error ? errBox(sc.error) : loadingBox());
   if (!Array.isArray(sc.voci)) return head() + errBox('Per visite e corsi va aggiornato lo script Google (guida nel repository).');
   const ult = scUltime(sc);
-  const voci = sc.voci.filter(v => v.attiva).map(v => v.nome);
-  const ops = (sc.operatori || []).filter(o => o.attivo !== false).map(o => o.nome).filter(n => match(n));
+  const tutti = scPersone(sc, true), mie = scPersone(sc, false);
+  const extra = tutti.length - mie.length;
+  const all = S.dipAll === undefined ? extra > 0 : S.dipAll;
+  const ops = (all ? tutti : mie).filter(n => match(n));
+  // Con tutta l'azienda si mostrano solo le colonne che hanno almeno una data
+  const conDati = new Set(ult.filter(r => ops.some(o => sameName(o, r.operatore))).map(r => r.voce.toLowerCase()));
+  const voci = sc.voci.filter(v => v.attiva && (!all || conDati.has(v.nome.toLowerCase()))).map(v => v.nome);
   const vic = scVicine(sc).filter(r => match(r.operatore, r.voce))
     .concat((sc.operatori || []).filter(o => o.attivo !== false && o.scadenzaContratto && daysTo(o.scadenzaContratto) <= FINESTRA_SCAD && match(o.nome))
       .map(o => ({ operatore: o.nome, voce: 'Contratto a tempo determinato', scadenza: o.scadenzaContratto, contratto: true })))
@@ -1065,11 +1081,12 @@ function pDipendenti() {
     return `<button data-scedit="${esc(r.id)}" aria-label="Modifica ${esc(voce)} di ${esc(op)}">${cls ? chip(cls, fmtIso(r.scadenza)) : r.scadenza ? fmtIso(r.scadenza) : 'fatto ' + fmtIso(r.fatto)}</button>`;
   };
   const ctr = contrattiHtml(sc);
-  return head(`<button class="btn" data-act="scNew">${icon('plus')}Registra visita o corso</button><button class="btn ghost" data-act="scVoci">Visite, corsi e durata</button><button class="btn plain" data-act="ops">${icon('dipendenti')}Operatori</button>`) +
+  return head(`<button class="btn" data-act="scNew">${icon('plus')}Registra visita o corso</button><button class="btn ghost" data-act="scImport">${icon('download')}Importa da Excel</button><button class="btn ghost" data-act="scVoci">Visite, corsi e durata</button><button class="btn plain" data-act="ops">${icon('dipendenti')}Operatori</button>`) +
     `<article class="card"><div class="card-head"><h2>In scadenza</h2><small>scaduti e nei prossimi ${FINESTRA_SCAD} giorni</small></div>
     <div class="rows">${vic.map(r => `<div class="row"><div class="ini c${daysTo(r.scadenza) < 0 ? 3 : 0}" aria-hidden="true">${esc(initials(r.operatore))}</div><div class="txt"><b>${esc(r.operatore)}</b><span>${esc(r.voce)} · ${fmtIso(r.scadenza)}</span></div>${chip(daysTo(r.scadenza) < 0 ? 'no' : 'wait', scTxt(r))}${r.contratto ? `<button class="btn plain sm" data-ctredit="${esc(r.operatore)}">Aggiorna</button>` : `<button class="btn plain sm" data-screg="${esc(r.operatore)}|${esc(r.voce)}">Rinnova</button>`}</div>`).join('') || '<p class="empty">Niente in scadenza. ✓</p>'}</div></article>
     ${ctr}
-    <h2 style="font:600 18px var(--font-b);margin-top:6px">Visite mediche e corsi</h2>
+    <div class="card-head" style="margin-top:6px;flex-wrap:wrap;gap:10px"><h2 style="font:600 18px var(--font-b)">Visite mediche e corsi</h2>
+      ${extra > 0 ? `<div class="seg" role="group" aria-label="Chi mostrare"><button class="btn sm ${all ? 'plain' : ''}" data-dipall="0" aria-pressed="${!all}">Operatori del programma (${mie.length})</button><button class="btn sm ${all ? '' : 'plain'}" data-dipall="1" aria-pressed="${all}">Tutta l'azienda (${tutti.length})</button></div>` : ''}</div>
     <div class="table-box"><table><thead><tr><th>Dipendente</th>${voci.map(v => `<th>${esc(v.length > 22 ? v.slice(0, 20) + '…' : v)}</th>`).join('')}</tr></thead><tbody>
     ${ops.map(o => `<tr><td class="name">${esc(o)}</td>${voci.map(v => `<td class="cellbtn">${cell(o, v)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${voci.length + 1}" class="empty">Nessun dipendente.</td></tr>`}
     </tbody></table></div>`;
@@ -1485,6 +1502,83 @@ function scReg(pre) {
     renderPage();
   });
 }
+// ---------- Importa visite e corsi dagli Excel aziendali ----------
+// Si scelgono i file (formazione e/o tabellone visite mediche): il telefono li legge, mostra cosa entra e poi salva in blocco.
+function loadScript(src) {
+  return new Promise((ok, ko) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => ko(new Error('Non riesco a caricare ' + src)); document.head.appendChild(s); });
+}
+let xlsxReady = null;
+const needXlsx = () => xlsxReady || (xlsxReady = Promise.all([window.XLSX ? 0 : loadScript('xlsx.mini.min.js?v=1'), window.ImportScad ? 0 : loadScript('import-scadenze.js?v=1')]).catch(e => { xlsxReady = null; throw e; }));
+function scImport() {
+  const sc = S.cache.scad; if (!sc || !Array.isArray(sc.voci)) return;
+  needXlsx().catch(() => {});
+  openDlg(`<form id="impForm" style="display:grid;gap:12px"><h2>Importa da Excel</h2>
+    <p class="sub">Scegli i file esportati dall'azienda: <b>Formazione</b> (corsi con le scadenze) e <b>Tabellone scadenze visite mediche</b>. Puoi sceglierli insieme.
+    Entrano solo nomi e date: esiti, idoneità e mansioni restano fuori. Le date già presenti non si duplicano.</p>
+    <label class="field">File Excel<input type="file" id="impFiles" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" multiple required></label>
+    <div id="impOut"></div>
+    <div class="actions"><button type="button" class="btn plain" data-act="close">Annulla</button><button class="btn" type="submit" id="impGo" disabled>Importa</button></div></form>`);
+  let piano = null, buoni = [];
+  $('#impFiles').addEventListener('change', async e => {
+    const files = [...e.target.files];
+    piano = null; $('#impGo').disabled = true;
+    if (!files.length) { $('#impOut').innerHTML = ''; return; }
+    $('#impOut').innerHTML = '<p class="loading">Leggo i file…</p>';
+    try {
+      await needXlsx();
+      const letti = [];
+      for (const f of files) {
+        const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: true, cellStyles: true });
+        letti.push(Object.assign(ImportScad.leggi(wb, XLSX, todayIso()), { file: f.name }));
+      }
+      buoni = letti.filter(l => l.tipo);
+      piano = ImportScad.prepara(buoni, S.cache.scad);
+      const nomeTipo = { formazione: 'corsi di formazione', visite: 'visite mediche' };
+      const li = a => a.length ? `<ul style="margin:4px 0 0;padding-left:18px;display:grid;gap:3px;font-size:14px">${a.map(x => `<li>${x}</li>`).join('')}</ul>` : '';
+      $('#impOut').innerHTML = `<div style="display:grid;gap:10px">
+        ${letti.map(l => `<p class="sub" style="margin:0">${l.tipo ? '✓' : '⚠️'} <b>${esc(l.file)}</b>: ${l.tipo ? `${l.righe.length} date di ${nomeTipo[l.tipo]}` : 'non riconosciuto (serve il file Formazione o il tabellone delle visite mediche)'}</p>`).join('')}
+        ${piano.righe.length ? `<p style="margin:0;font:700 22px/1.15 var(--font-d)">${piano.righe.length} date da importare per ${piano.persone} dipendenti</p>` : '<p style="margin:0;font-weight:600">Niente di nuovo da importare.</p>'}
+        ${piano.doppioni ? `<p class="sub" style="margin:0">${piano.doppioni} date sono già nel registro e non si ripetono.</p>` : ''}
+        ${piano.nuoveVoci.length ? `<details><summary>${piano.nuoveVoci.length} corsi nuovi da aggiungere all'elenco</summary>${li(piano.nuoveVoci.map(v => `${esc(v.nome)} · ${esc(v.cat)} · ogni ${v.mesi} mesi`))}<p class="sub">La durata serve solo per i rinnovi: si cambia da «Visite, corsi e durata».</p></details>` : ''}
+        ${piano.abbinati.length ? `<details open><summary>Abbinati agli operatori del programma</summary>${li(piano.abbinati.map(([a, b]) => `${esc(a)} → <b>${esc(b)}</b>`))}</details>` : ''}
+        ${piano.saltate.length ? `<details><summary>${piano.saltate.length} non importate</summary>${li(piano.saltate.map(esc))}</details>` : ''}
+        ${piano.ignote.length ? `<p class="sub" style="margin:0">Colonne non riconosciute, saltate: ${esc(piano.ignote.join(', '))}</p>` : ''}
+        <p class="sub" style="margin:0">Dove l'Excel ha solo la scadenza, la data del corso è stimata (scadenza meno la durata) ed è scritto nelle note.</p></div>`;
+      $('#impGo').disabled = !piano.righe.length;
+      $('#impGo').textContent = piano.righe.length ? `Importa ${piano.righe.length} date` : 'Importa';
+    } catch (err) {
+      $('#impOut').innerHTML = `<p class="empty">⚠️ ${esc(err && err.message || 'File non leggibile')}</p>`;
+    }
+  });
+  $('#impForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!piano || !piano.righe.length) return;
+    const btn = $('#impGo'); btn.disabled = true; btn.textContent = 'Importo…';
+    const prog = t => { const o = $('#impOut'); if (o) o.innerHTML = `<p class="loading">${esc(t)}</p>`; };
+    prog('Salvo nel registro…');
+    try {
+      let out = await queued('scadimporta', { voci: piano.nuoveVoci.map(v => ({ nome: v.nome, cat: v.cat, mesi: v.mesi })), righe: piano.righe }), n;
+      if (Array.isArray(out.righe) && typeof out.importate === 'number') n = out.importate;
+      else {
+        // Script Google non ancora aggiornato: si salva una data alla volta (più lento)
+        if (piano.nuoveVoci.length) out = await queued('scadvoci', { voci: S.cache.scad.voci.concat(piano.nuoveVoci) });
+        n = 0;
+        for (const r of piano.righe) {
+          prog(`Script Google da aggiornare: salvo una data alla volta… ${n + 1} di ${piano.righe.length}`);
+          out = await queued('scadreg', { reg: Object.assign({ id: uid() }, r) }); S.cache.scad = out; n++;
+        }
+      }
+      S.cache.scad = out; S.dipAll = true;
+      dlg.close(); toast(`Importate ${n} date`);
+    } catch (err) {
+      // Si riparte solo da quello che manca: le date già salvate non si ripetono
+      piano = ImportScad.prepara(buoni, S.cache.scad);
+      const w = why(err); prog(`${w || 'Importazione interrotta'} · Ne mancano ${piano.righe.length}.`); btn.disabled = !piano.righe.length; btn.textContent = 'Riprova';
+      return;
+    }
+    renderPage();
+  });
+}
 function scVociEdit() {
   const sc = S.cache.scad; if (!sc || !Array.isArray(sc.voci)) return;
   openDlg(`<form id="vociForm" style="display:grid;gap:12px"><h2>Visite, corsi e durata</h2>
@@ -1538,7 +1632,7 @@ function moreMenu() {
 // ---------- Eventi ----------
 document.addEventListener('click', e => {
   if (document.body.classList.contains('printing')) endPrint();
-  const el = e.target.closest('[data-ctredit],[data-accedit],[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy]');
+  const el = e.target.closest('[data-ctredit],[data-accedit],[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy],[data-dipall]');
   if (!el) return;
   const d = el.dataset;
   if (d.go) return go(d.go);
@@ -1571,6 +1665,7 @@ document.addEventListener('click', e => {
   if (d.extra) return decide('extra', d.extra, d.ok === '1', el);
   if (d.ass) return decide('ass', d.ass, d.ok === '1', el);
   if (d.pdf) return downloadPdf(d.pdf, el);
+  if (d.dipall) { S.dipAll = d.dipall === '1'; return renderPage(); }
   if (d.copy) return navigator.clipboard.writeText(d.copy).then(() => toast('Link copiato'), () => toast('Copia non riuscita: tieni premuto sul link'));
   switch (d.act) {
     case 'demo': S.demo = true; S.pwd = null; return demoApi('leggi').then(enter);
@@ -1595,6 +1690,7 @@ document.addEventListener('click', e => {
     case 'printScheda': return printScheda();
     case 'scNew': return scReg();
     case 'scVoci': return scVociEdit();
+    case 'scImport': return scImport();
     case 'savePlan': return savePlan(el);
     case 'undoPlan': if (confirm('Annullare le modifiche non salvate?')) { S.plan = null; renderPage(); } return;
     case 'copyPrev': return copyPrev();
@@ -1723,6 +1819,12 @@ async function demoApi(azione, x) {
     case 'scadreg': D.scad.righe = D.scad.righe.filter(r => r.id !== x.reg.id).concat([Object.assign({}, x.reg)]); return ok(D.scad);
     case 'scadelimina': D.scad.righe = D.scad.righe.filter(r => r.id !== x.id); return ok(D.scad);
     case 'scadvoci': D.scad.voci = clone(x.voci); return ok(D.scad);
+    case 'scadimporta': {
+      (x.voci || []).forEach(v => { if (!D.scad.voci.some(w => sameName(w.nome, v.nome))) D.scad.voci.push(Object.assign({ attiva: true }, v)); });
+      const k = r => (r.operatore + '|' + r.voce + '|' + r.scadenza).toLowerCase(), visti = new Set(D.scad.righe.map(k));
+      const nuove = (x.righe || []).filter(r => !visti.has(k(r)) && visti.add(k(r))).map(r => Object.assign({ id: uid() }, r));
+      D.scad.righe = D.scad.righe.concat(nuove); return ok(Object.assign({}, D.scad, { importate: nuove.length }));
+    }
     case 'codice': return ok({ codice: 'PROVA1234' });
     case 'report': {
       const per = {};

@@ -310,6 +310,7 @@ function admin_(req) {
     case 'scadreg': registraScadenza_(req.reg); return scadenze_();
     case 'scadelimina': eliminaScadenza_(req.id); return scadenze_();
     case 'scadvoci': salvaVociScadenze_(req.voci); return scadenze_();
+    case 'scadimporta': { const n = importaScadenze_(req.voci, req.righe); return Object.assign(scadenze_(), { importate: n }); }
     case 'dpiconsegna': consegnaDpi_(req.consegna); return dpi_();
     case 'dpitaglie': salvaTaglieDpi_(req.operatore, req.taglie); return dpi_();
     case 'dpicapi': salvaCapiDpi_(req.capi); return dpi_();
@@ -1497,6 +1498,44 @@ function salvaVociScadenze_(lista) {
   const sh = scVociSh_();
   if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 4).clearContent();
   if (righe.length) sh.getRange(2, 1, righe.length, 4).setValues(righe);
+}
+
+/**
+ * Importazione in blocco dagli Excel aziendali (formazione e visite mediche).
+ * Aggiunge le voci che mancano e scrive tutte le righe in una volta, saltando i doppioni
+ * (stesso operatore, stessa voce, stessa scadenza). Torna quante righe ha scritto.
+ */
+function importaScadenze_(voci, righe) {
+  const shV = scVociSh_();
+  const esistenti = righe_(shV, 4).filter(r => String(r[0]).trim());
+  const catDi = {};
+  esistenti.forEach(r => { catDi[String(r[0]).trim().toLowerCase()] = String(r[1] || 'Formazione'); });
+  const nuoveV = [];
+  (Array.isArray(voci) ? voci : []).forEach(v => {
+    const nome = String(v && v.nome || '').trim().slice(0, 80);
+    if (!nome || catDi[nome.toLowerCase()] !== undefined) return;
+    const cat = String(v.cat || 'Formazione').slice(0, 40);
+    catDi[nome.toLowerCase()] = cat;
+    nuoveV.push([nome, cat, Math.max(0, Math.min(240, Number(v.mesi) || 0)), 'SI']);
+  });
+  if (nuoveV.length) shV.getRange(shV.getLastRow() + 1, 1, nuoveV.length, 4).setValues(nuoveV);
+
+  const sh = scSh_();
+  const visti = {};
+  scadenze_().righe.forEach(r => { visti[r.operatore.toLowerCase() + '|' + r.voce.toLowerCase() + '|' + r.scadenza] = true; });
+  const adesso = new Date();
+  const out = [];
+  (Array.isArray(righe) ? righe : []).slice(0, 2000).forEach(x => {
+    const nome = String(x && x.operatore || '').trim().slice(0, 60), voce = String(x && x.voce || '').trim().slice(0, 80);
+    const fatto = daIso_(x && x.fatto), scad = daIso_(x && x.scadenza);
+    if (!nome || !voce || !fatto) return;
+    const k = nome.toLowerCase() + '|' + voce.toLowerCase() + '|' + (scad ? dataIso_(scad) : '');
+    if (visti[k]) return;
+    visti[k] = true;
+    out.push([Utilities.getUuid(), nome, voce, catDi[voce.toLowerCase()] || '', fatto, scad || '', String(x.note || '').slice(0, 200), adesso]);
+  });
+  if (out.length) sh.getRange(sh.getLastRow() + 1, 1, out.length, INTEST_SC.length).setValues(out);
+  return out.length;
 }
 
 /** Ultima registrazione per operatore e voce, scaduta o in scadenza entro la finestra. */
