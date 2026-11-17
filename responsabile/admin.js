@@ -1565,7 +1565,13 @@ function scImport() {
         n = 0;
         for (const r of piano.righe) {
           prog(`Script Google da aggiornare: salvo una data alla volta… ${n + 1} di ${piano.righe.length}`);
-          out = await queued('scadreg', { reg: Object.assign({ id: uid() }, r) }); S.cache.scad = out; n++;
+          const reg = Object.assign({ id: uid() }, r);
+          // Se la rete salta ("Load failed") si riprova la stessa data, con lo stesso id: non si duplica
+          for (let t = 1; ; t++) {
+            try { out = await queued('scadreg', { reg }); break; }
+            catch (err) { if (err && err.message === 'auth' || t >= 4) throw err; prog(`Connessione persa, riprovo… (${n + 1} di ${piano.righe.length})`); await new Promise(ok => setTimeout(ok, 2500 * t)); }
+          }
+          S.cache.scad = out; n++;
         }
       }
       S.cache.scad = out; S.dipAll = true;
