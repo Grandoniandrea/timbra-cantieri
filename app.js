@@ -56,7 +56,7 @@ function load() {
 }
 // Registro aziendale GEECO (Google Apps Script): tutti i telefoni sono collegati in automatico.
 // Le operazioni del responsabile sono protette dalla password verificata dallo script.
-const APP_VERSION = 74;
+const APP_VERSION = 76;
 const DEFAULT_ENDPOINT = 'https://script.google.com/macros/s/AKfycbwrPn7c9W0Dl9mUZGq6Yp35uhv2wprrhOUFFB4PF50ZYtIhY2o1bVugEYrmIJh3NJf6xw/exec';
 let db = load();
 db.queue = db.queue || [];
@@ -610,7 +610,7 @@ function navUrl(x) {
 }
 const intWhere = x => [x.indirizzo, x.localita].filter(Boolean).join(', ');
 // Foto ridotte (lato lungo max 1280 px, JPEG) per inviarle anche con poco campo
-function compressImage(file, max = 1280, q = 0.72) {
+function compressImage(file, max = 1280, q = 0.72, stamp = null) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
@@ -618,7 +618,16 @@ function compressImage(file, max = 1280, q = 0.72) {
       const k = Math.min(1, max / Math.max(img.width, img.height));
       const c = document.createElement('canvas');
       c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      const g = c.getContext('2d');
+      g.drawImage(img, 0, 0, c.width, c.height);
+      // Data e ora scritte sulla foto (striscia in basso), così restano anche se la foto viene inoltrata
+      if (stamp && stamp.length) {
+        const fs = Math.max(16, Math.round(c.width / 34)), pad = Math.round(fs * 0.6), lh = Math.round(fs * 1.3);
+        const h = pad * 2 + lh * stamp.length;
+        g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(0, c.height - h, c.width, h);
+        g.fillStyle = '#fff'; g.textBaseline = 'top';
+        stamp.forEach((t, i) => { g.font = `${i ? '' : 'bold '}${i ? Math.round(fs * 0.85) : fs}px -apple-system, Arial, sans-serif`; g.fillText(String(t).slice(0, 90), pad, c.height - h + pad + i * lh, c.width - pad * 2); });
+      }
       URL.revokeObjectURL(url);
       resolve(c.toDataURL('image/jpeg', q));
     };
@@ -640,6 +649,9 @@ async function syncInterventi() {
     const res = await withTimeout(fetch(ep(`azione=interventi&${chiSono()}`)), 20000);
     const out = await res.json();
     if (!out.ok || !Array.isArray(out.interventi)) return;
+    // Riaperto dal responsabile (es. foto da rifare): se la chiusura è già stata inviata, sul telefono torna da fare
+    const inCoda = new Set(db.queue.filter(q => q.type === 'intervento' && q.intervento).map(q => q.intervento.id));
+    out.interventi.forEach(x => { if (x.stato !== 'Fatto' && db.intChiusi && db.intChiusi[x.id] && !inCoda.has(x.id)) { delete db.intChiusi[x.id]; if (db.intVisti) delete db.intVisti[x.id]; delete intFoto[x.id]; } });
     if (JSON.stringify(out.interventi) !== JSON.stringify(db.interventi)) { db.interventi = out.interventi; save(); render(); }
     // Finestra che si apre da sola per ogni intervento nuovo assegnato a me (una volta sola per intervento)
     const visti = db.intVisti || (db.intVisti = {});
@@ -695,8 +707,9 @@ function intView(id) {
   if (!x) return;
   const f = intFoto[id] || (intFoto[id] = {});
   const done = x.stato === 'Fatto' || intDoneLocal(id);
-  const thumb = (k, label) => `<label class="int-photo">${f[k] ? `<img src="${f[k]}" alt="${label}"><small>${label} ✓ · tocca per rifarla</small>` : `<span>📷 ${label}</span>`}
-      ${done ? '' : `<input type="file" accept="image/*" capture="environment" data-foto="${k}" hidden>`}</label>`;
+  const thumb = (k, label) => `<div class="int-ph"><label class="int-photo">${f[k] ? `<img src="${f[k]}" alt="${label}"><small>${label} ✓${f[k + 'At'] ? ' · ' + fmtTime(f[k + 'At']) : ''} · tocca per rifarla</small>` : `<span>📷 ${label}</span>`}
+      ${done ? '' : `<input type="file" accept="image/*" capture="environment" data-foto="${k}" hidden>`}</label>
+      ${f[k] && !done ? `<button type="button" class="btn ghost int-del" data-delfoto="${k}">🗑 Elimina</button>` : ''}</div>`;
   openDialog(`
     <h3>📍 Intervento</h3>
     <div class="int-info">
@@ -720,11 +733,17 @@ function intView(id) {
       setTimeout(() => intClose(x), 50);
     }
   });
+  // Foto venuta male: si toglie e si rifà
+  document.querySelectorAll('#dlgBody [data-delfoto]').forEach(b => {
+    b.onclick = () => { if (!confirm('Eliminare questa foto?')) return; const nota = $('#dlgBody input[name=nota]'); if (nota) f.nota = nota.value; f[b.dataset.delfoto] = null; f[b.dataset.delfoto + 'At'] = null; intView(id); };
+  });
   document.querySelectorAll('[data-foto]').forEach(inp => {
     inp.onchange = async () => {
       const file = inp.files && inp.files[0];
       if (!file) return;
-      try { f[inp.dataset.foto] = await compressImage(file); } catch (e) { alert('Non riesco a leggere la foto, riprova.'); }
+      const quando = new Date();
+      const stamp = [`${quando.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' })} ore ${fmtTime(quando.getTime())} · foto ${inp.dataset.foto}`, [intWhere(x), fullName()].filter(Boolean).join(' · ')];
+      try { f[inp.dataset.foto] = await compressImage(file, 1280, 0.72, stamp); f[inp.dataset.foto + 'At'] = quando.getTime(); } catch (e) { alert('Non riesco a leggere la foto, riprova.'); }
       const nota = $('#dlgBody input[name=nota]');
       if (nota) f.nota = nota.value;
       intView(id);

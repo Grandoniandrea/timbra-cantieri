@@ -638,3 +638,5 @@ dialog .btn:has(> .ico) { display: flex; justify-content: flex-start; text-align
 .mie-scad, .mie-scad b { color: #1f1f1e; }
 .mie-scad small, .mie-scad .ms-row span { color: #4a4a48; }
 .mie-scad.bad small { color: #7f1414; }
+.int-ph { display: grid; gap: 6px; }
+.int-del { min-height: 40px; padding: 6px 10px; font-size: 14px; color: #b42318; }

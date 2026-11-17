@@ -324,6 +324,7 @@ function admin_(req) {
     case 'salvaintervento': salvaIntervento_(req.intervento); return { ok: true, interventi: interventi_(), operatori: operatori_() };
     case 'eliminaintervento': eliminaIntervento_(req.id); return { ok: true, interventi: interventi_(), operatori: operatori_() };
     case 'riapriintervento': riapriIntervento_(req.id); return { ok: true, interventi: interventi_(), operatori: operatori_() };
+    case 'eliminafotointervento': eliminaFotoIntervento_(req.id, req.tipo); if (req.riapri) riapriIntervento_(req.id); return { ok: true, interventi: interventi_(), operatori: operatori_() };
     case 'fotointervento': return { ok: true, foto: fotoIntervento_(req.id, req.tipo) };
     case 'azzera': azzera_(); return { ok: true };
     case 'sede': impostaSede_(req.sede); return { ok: true, sede: sede_() };
@@ -1294,6 +1295,18 @@ function riapriIntervento_(id) {
   const sh = foglioInterventi_();
   const r = trovaRiga_(sh, id);
   if (r) sh.getRange(r, 11, 1, 3).setValues([[INT_DA_FARE, '', '']]);
+}
+
+/** Toglie una foto fatta male (prima o dopo): va nel cestino di Drive e la cella si svuota. */
+function eliminaFotoIntervento_(id, tipo) {
+  const col = tipo === 'prima' ? 16 : tipo === 'dopo' ? 17 : 0;
+  if (!col) return;
+  const sh = foglioInterventi_();
+  const r = trovaRiga_(sh, id);
+  if (!r) return;
+  const c = sh.getRange(r, col), fid = String(c.getValue() || '');
+  if (fid) { try { DriveApp.getFileById(fid).setTrashed(true); } catch (e) { /* già tolta */ } }
+  c.setValue('');
 }
 
 function eliminaIntervento_(id) {

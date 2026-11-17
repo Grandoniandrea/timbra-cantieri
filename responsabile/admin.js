@@ -976,7 +976,18 @@ function intForm(x) {
   });
 }
 async function showFoto(id, tipo) {
-  openDlg(`<h2>${tipo === 'screenshot' ? 'Segnalazione' : tipo === 'prima' ? 'Foto prima' : 'Foto dopo'}</h2><p class="loading" id="fotoBox">Carico la foto…</p><div class="actions"><button class="btn" data-act="close">Chiudi</button></div>`);
+  const puoi = tipo === 'prima' || tipo === 'dopo';
+  openDlg(`<h2>${tipo === 'screenshot' ? 'Segnalazione' : tipo === 'prima' ? 'Foto prima' : 'Foto dopo'}</h2><p class="loading" id="fotoBox">Carico la foto…</p>
+    <p class="sub" id="fotoMsg" role="status" style="margin:0"></p>
+    <div class="actions" style="flex-wrap:wrap">${puoi ? '<button type="button" class="btn plain" id="fotoDel" style="color:#a61b1b">Elimina foto</button><button type="button" class="btn ghost" id="fotoDelRi">Elimina e fai rifare</button>' : ''}<button class="btn" data-act="close">Chiudi</button></div>`);
+  // Foto fatta male: si toglie (va nel cestino di Drive); "fai rifare" riapre l'intervento sul telefono dell'operatore
+  const elimina = async riapri => {
+    if (!confirm(riapri ? 'Eliminare la foto e riaprire l\'intervento, così l\'operatore la rifà?' : 'Eliminare questa foto?')) return;
+    const msg = $('#fotoMsg'); if (msg) msg.textContent = 'Elimino…';
+    try { S.cache.interventi = await queued('eliminafotointervento', { id, tipo, riapri }); dlg.close(); toast(riapri ? 'Foto eliminata, intervento riaperto' : 'Foto eliminata'); renderPage(); }
+    catch (err) { if (msg) { msg.textContent = '⚠️ ' + (why(err) || 'Non eliminata'); msg.style.color = '#a61b1b'; } }
+  };
+  if (puoi) { $('#fotoDel').addEventListener('click', () => elimina(false)); $('#fotoDelRi').addEventListener('click', () => elimina(true)); }
   try {
     const out = await queued('fotointervento', { id, tipo });
     const box = $('#fotoBox'); if (!box) return;
@@ -2065,6 +2076,7 @@ async function demoApi(azione, x) {
     }
     case 'eliminaintervento': D.interventi = D.interventi.filter(i => i.id !== x.id); return ok({ interventi: D.interventi, operatori: D.operatori });
     case 'riapriintervento': D.interventi.forEach(i => { if (i.id === x.id) { i.stato = 'Da fare'; i.fattoDa = ''; i.fattoIl = null; } }); return ok({ interventi: D.interventi, operatori: D.operatori });
+    case 'eliminafotointervento': D.interventi.forEach(i => { if (i.id === x.id) { if (x.tipo === 'prima') i.fotoPrima = false; if (x.tipo === 'dopo') i.fotoDopo = false; if (x.riapri) { i.stato = 'Da fare'; i.fattoDa = ''; i.fattoIl = null; } } }); return ok({ interventi: D.interventi, operatori: D.operatori });
     case 'scad': return ok(D.scad);
     case 'dpi': return ok(D.dpi);
     case 'modifica': D.t.forEach(t => { if (t.id === x.t.id) Object.assign(t, { start: x.t.start, end: x.t.end, cantiere: x.t.cantiere }); }); return ok({});
