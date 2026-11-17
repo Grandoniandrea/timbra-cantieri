@@ -1069,6 +1069,36 @@ function scPersone(sc, tutti) {
   return ops.concat(altri.sort((a, b) => a.localeCompare(b, 'it')));
 }
 const scTxt = r => { const g = daysTo(r.scadenza); return g === null ? 'senza scadenza' : g < 0 ? `scaduto da ${-g} g` : g === 0 ? 'scade oggi' : `scade tra ${g} g`; };
+function scStatoPersone(sc, nomi) {
+  const ult = scUltime(sc), out = {};
+  nomi.forEach(n => {
+    const mie = ult.filter(r => sameName(r.operatore, n));
+    const over = [], under = [];
+    mie.forEach(r => { const g = daysTo(r.scadenza); if (g === null) return; if (g < 0) over.push(r); else if (g <= FINESTRA_SCAD) under.push(r); });
+    const o = (sc.operatori || []).find(x => sameName(x.nome, n) && x.scadenzaContratto);
+    if (o) { const g = daysTo(o.scadenzaContratto); const c = { operatore: n, voce: 'Contratto a tempo determinato', scadenza: o.scadenzaContratto, contratto: true }; if (g < 0) over.push(c); else if (g <= FINESTRA_SCAD) under.push(c); }
+    over.sort((a, b) => a.scadenza.localeCompare(b.scadenza)); under.sort((a, b) => a.scadenza.localeCompare(b.scadenza));
+    out[n] = { over, under, tot: mie.length };
+  });
+  return out;
+}
+// Scheda del dipendente: tutte le sue visite e corsi, con Rinnova / Registra
+function scPerson(nome) {
+  const sc = S.cache.scad; if (!sc || !sc.righe) return;
+  const ult = scUltime(sc).filter(r => sameName(r.operatore, nome));
+  const ord = r => { const g = daysTo(r.scadenza); return g === null ? 3 : g < 0 ? 0 : g <= FINESTRA_SCAD ? 1 : 2; };
+  ult.sort((a, b) => ord(a) - ord(b) || (a.scadenza || '9').localeCompare(b.scadenza || '9'));
+  const mancanti = sc.voci.filter(v => v.attiva && !ult.some(r => sameName(r.voce, v.nome)));
+  const st = scStatoPersone(sc, [nome])[nome];
+  openDlg(`<h2>${esc(nome)}</h2>
+    <p class="sub">${st.over.length ? `<b class="tx-no">${st.over.length} ${st.over.length === 1 ? 'scaduto' : 'scaduti'}</b> · ` : ''}${st.under.length ? `<b class="tx-wait">${st.under.length} in scadenza</b> · ` : ''}${ult.length} ${ult.length === 1 ? 'voce registrata' : 'voci registrate'}</p>
+    <div class="rows" style="margin-top:6px">${ult.map(r => { const g = daysTo(r.scadenza), k = ord(r);
+      return `<div class="row prow-d"><div class="txt"><b>${esc(r.voce)}</b><span>${r.scadenza ? 'scade ' + fmtIso(r.scadenza) : 'senza scadenza'} · fatto ${fmtIso(r.fatto)}${r.note ? ' · ' + esc(r.note) : ''}</span></div>
+        ${k === 0 ? chip('no blink', `scaduto ${-g} g fa`) : k === 1 ? chip('wait blink slow', g === 0 ? 'oggi' : `tra ${g} g`) : k === 2 ? chip('ok', 'In regola') : chip('grey', '—')}
+        <button class="btn ${k <= 1 ? '' : 'plain'} sm" data-screg="${esc(nome)}|${esc(r.voce)}">Rinnova</button><button class="btn plain sm" data-scedit="${esc(r.id)}" aria-label="Modifica ${esc(r.voce)}">Modifica</button></div>`; }).join('') || '<p class="empty">Niente registrato.</p>'}</div>
+    ${mancanti.length ? `<details style="margin-top:8px"><summary>Aggiungi visita o corso (${mancanti.length} non registrati)</summary><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${mancanti.map(v => `<button class="btn plain sm" data-screg="${esc(nome)}|${esc(v.nome)}">+ ${esc(v.nome)}</button>`).join('')}</div></details>` : ''}
+    <div class="actions"><button type="button" class="btn" data-act="close">Chiudi</button></div>`);
+}
 function pDipendenti() {
   const sc = needScad();
   if (!sc || sc.error) return head() + (sc && sc.error ? errBox(sc.error) : loadingBox());
@@ -1077,7 +1107,13 @@ function pDipendenti() {
   const tutti = scPersone(sc, true), mie = scPersone(sc, false);
   const extra = tutti.length - mie.length;
   const all = S.dipAll === undefined ? extra > 0 : S.dipAll;
-  const ops = (all ? tutti : mie).filter(n => match(n));
+  const base = (all ? tutti : mie).filter(n => match(n));
+  // Specchietto: per ogni dipendente le voci scadute e in scadenza (più il contratto a termine)
+  const stato = scStatoPersone(sc, base);
+  const nO = base.filter(n => stato[n].over.length).length, nU = base.filter(n => !stato[n].over.length && stato[n].under.length).length;
+  const F = S.dipF || (nO || nU ? 'rischio' : 'tutti');
+  const passa = n => F === 'tutti' ? true : F === 'scaduti' ? stato[n].over.length > 0 : F === 'scadenza' ? !stato[n].over.length && stato[n].under.length > 0 : stato[n].over.length + stato[n].under.length > 0;
+  const ops = base.filter(passa);
   // Con tutta l'azienda si mostrano solo le colonne che hanno almeno una data
   const conDati = new Set(ult.filter(r => ops.some(o => sameName(o, r.operatore))).map(r => r.voce.toLowerCase()));
   const voci = sc.voci.filter(v => v.attiva && (!all || conDati.has(v.nome.toLowerCase()))).map(v => v.nome);
@@ -1097,13 +1133,21 @@ function pDipendenti() {
     (() => { const o = vic.filter(r => daysTo(r.scadenza) < 0).length, u = vic.length - o;
       return vic.length ? `<div class="scad-alert${o ? '' : ' only-wait'}" role="status"><span class="dot blink${o ? '' : ' slow'}" aria-hidden="true"></span>
         <p>${o ? `<b>${o} ${o === 1 ? 'scaduto' : 'scaduti'}</b>` : ''}${o && u ? ' · ' : ''}${u ? `<b>${u} in scadenza</b> nei prossimi ${FINESTRA_SCAD} giorni` : ''}</p></div>` : ''; })() +
-    `<article class="card"><div class="card-head"><h2>In scadenza</h2><small>scaduti e nei prossimi ${FINESTRA_SCAD} giorni</small></div>
-    <div class="rows">${vic.map(r => `<div class="row"><div class="ini c${daysTo(r.scadenza) < 0 ? 3 : 0}" aria-hidden="true">${esc(initials(r.operatore))}</div><div class="txt"><b>${esc(r.operatore)}</b><span>${esc(r.voce)} · ${fmtIso(r.scadenza)}</span></div>${chip(daysTo(r.scadenza) < 0 ? 'no blink' : 'wait blink slow', scTxt(r))}${r.contratto ? `<button class="btn plain sm" data-ctredit="${esc(r.operatore)}">Aggiorna</button>` : `<button class="btn plain sm" data-screg="${esc(r.operatore)}|${esc(r.voce)}">Rinnova</button>`}</div>`).join('') || '<p class="empty">Niente in scadenza. ✓</p>'}</div></article>
+    `<article class="card"><div class="card-head"><h2>Specchietto dipendenti</h2><small>tocca un nome per intervenire</small></div>
+    <div class="seg filt" role="group" aria-label="Filtro">
+      ${[['rischio', `Da sistemare (${nO + nU})`, ''], ['scaduti', `Scaduti (${nO})`, nO ? 'no' : ''], ['scadenza', `In scadenza (${nU})`, nU ? 'wait' : ''], ['tutti', `Tutti (${base.length})`, '']]
+        .map(([k, t, c]) => `<button class="btn sm ${F === k ? '' : 'plain'} ${F !== k && c ? 'f-' + c : ''}" data-dipf="${k}" aria-pressed="${F === k}">${t}</button>`).join('')}</div>
+    <div class="rows">${ops.map(n => { const x = stato[n], o = x.over.length, u = x.under.length;
+      const voci2 = x.over.concat(x.under).slice(0, 4).map(r => `${esc(r.voce.length > 28 ? r.voce.slice(0, 26) + '…' : r.voce)} <b class="${daysTo(r.scadenza) < 0 ? 'tx-no' : 'tx-wait'}">${daysTo(r.scadenza) < 0 ? 'scaduto' : 'tra ' + daysTo(r.scadenza) + ' g'}</b>`).join(' · ');
+      return `<button class="row prow" data-scperson="${esc(n)}"><div class="ini c${o ? 3 : u ? 1 : 0}" aria-hidden="true">${esc(initials(n))}</div>
+        <div class="txt"><b>${esc(n)}</b><span>${voci2 || `${x.tot} ${x.tot === 1 ? 'voce registrata' : 'voci registrate'} · in regola`}${o + u > 4 ? ` · e altre ${o + u - 4}` : ''}</span></div>
+        ${o ? chip('no blink', `${o} ${o === 1 ? 'scaduto' : 'scaduti'}`) : ''}${u ? chip('wait blink slow', `${u} in scadenza`) : ''}${!o && !u ? chip('ok', 'In regola') : ''}
+        <span class="btn plain sm" aria-hidden="true">Intervieni</span></button>`; }).join('') || `<p class="empty">${F === 'tutti' ? 'Nessun dipendente.' : 'Nessuno in questo elenco. ✓'}</p>`}</div></article>
     ${ctr}
     <div class="card-head" style="margin-top:6px;flex-wrap:wrap;gap:10px"><h2 style="font:600 18px var(--font-b)">Visite mediche e corsi</h2>
       ${extra > 0 ? `<div class="seg" role="group" aria-label="Chi mostrare"><button class="btn sm ${all ? 'plain' : ''}" data-dipall="0" aria-pressed="${!all}">Operatori del programma (${mie.length})</button><button class="btn sm ${all ? '' : 'plain'}" data-dipall="1" aria-pressed="${all}">Tutta l'azienda (${tutti.length})</button></div>` : ''}</div>
     <div class="table-box"><table><thead><tr><th>Dipendente</th>${voci.map(v => `<th>${esc(v.length > 22 ? v.slice(0, 20) + '…' : v)}</th>`).join('')}</tr></thead><tbody>
-    ${ops.map(o => `<tr><td class="name">${esc(o)}</td>${voci.map(v => `<td class="cellbtn">${cell(o, v)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${voci.length + 1}" class="empty">Nessun dipendente.</td></tr>`}
+    ${ops.map(o => `<tr><td class="name"><button class="link" data-scperson="${esc(o)}" style="color:var(--ink);text-decoration:none;font-weight:600">${esc(o)}</button></td>${voci.map(v => `<td class="cellbtn">${cell(o, v)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${voci.length + 1}" class="empty">Nessun dipendente.</td></tr>`}
     </tbody></table></div>`;
 }
 
@@ -1658,7 +1702,7 @@ function moreMenu() {
 // ---------- Eventi ----------
 document.addEventListener('click', e => {
   if (document.body.classList.contains('printing')) endPrint();
-  const el = e.target.closest('[data-ctredit],[data-accedit],[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy],[data-dipall]');
+  const el = e.target.closest('[data-ctredit],[data-accedit],[data-tedit],[data-dedit],[data-screg],[data-scedit],[data-sq],[data-addsq],[data-assday],[data-go],[data-act],[data-tf],[data-if],[data-week],[data-foto],[data-assign],[data-reopen],[data-editint],[data-delint],[data-extra],[data-ass],[data-pdf],[data-copy],[data-dipall],[data-dipf],[data-scperson]');
   if (!el) return;
   const d = el.dataset;
   if (d.go) return go(d.go);
@@ -1692,6 +1736,8 @@ document.addEventListener('click', e => {
   if (d.ass) return decide('ass', d.ass, d.ok === '1', el);
   if (d.pdf) return downloadPdf(d.pdf, el);
   if (d.dipall) { S.dipAll = d.dipall === '1'; return renderPage(); }
+  if (d.dipf) { S.dipF = d.dipf; return renderPage(); }
+  if (d.scperson) return scPerson(d.scperson);
   if (d.copy) return navigator.clipboard.writeText(d.copy).then(() => toast('Link copiato'), () => toast('Copia non riuscita: tieni premuto sul link'));
   switch (d.act) {
     case 'demo': S.demo = true; S.pwd = null; return demoApi('leggi').then(enter);
