@@ -952,8 +952,18 @@ async function saveInt(x, okMsg) {
   catch (e) { const w = why(e); if (w) toast(w); }
   renderPage();
 }
-function intForm(x) {
-  const it = S.cache.interventi, ops = it && it.operatori ? it.operatori.filter(o => o.attivo !== false).map(o => o.nome) : [];
+// Operatori già scaricati da qualsiasi pagina (interventi, programma, dipendenti, DPI)
+function opsNoti() {
+  const fonti = [S.cache.interventi, S.plan, S.cache.scad, S.cache.dpi].filter(f => f && Array.isArray(f.operatori) && f.operatori.length);
+  return fonti.length ? fonti[0].operatori.filter(o => o.attivo !== false).map(o => o.nome) : [];
+}
+async function intForm(x) {
+  let ops = opsNoti();
+  // Aperto dalla dashboard prima che gli interventi siano caricati: prima si scaricano gli operatori
+  if (!ops.length) {
+    toast('Carico gli operatori…');
+    try { S.cache.interventi = await queued('interventi'); ops = opsNoti(); } catch (err) { const w = why(err); if (w) toast(w); }
+  }
   x = x || { data: todayIso(), assegnato: 'Tutti' };
   openDlg(`<form id="intForm" style="display:grid;gap:12px">
     <h2>${x.id ? 'Modifica intervento' : 'Nuovo intervento'}</h2>
